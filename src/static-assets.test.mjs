@@ -18,7 +18,7 @@ test("only explicit public test assets are statically published",()=>{
  const art=read("public/pilot/comic-page-v1.svg");
  assert.match(art,/<svg\b/);
  assert.match(art,/NEXORA/);
- assert.doesNotMatch(art,/<script\b|<foreignObject\b|https?:\/\/|(?:href|src)\s*=/i);
+ assert.doesNotMatch(art.replace('xmlns="http://www.w3.org/2000/svg"',""),/<script\b|<foreignObject\b|https?:\/\/|(?:href|src)\s*=/i);
  assert.ok(Buffer.byteLength(art)<25000,"Keep synthetic fixture tiny");
 });
 test("public fixture has explicit safe headers and cannot override dynamic auth",()=>{
