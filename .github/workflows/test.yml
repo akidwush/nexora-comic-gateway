@@ -1,0 +1,27 @@
+name: Cloudflare Comic Gateway Pilot Tests
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: package-lock.json
+      - name: Install dependencies
+        run: npm ci --no-audit --no-fund
+      - name: Validate Worker syntax
+        run: npm run check
+      - name: Run offline security unit tests
+        run: npm test
+      - name: Verify Wrangler bundle without deployment
+        run: npx wrangler deploy --dry-run --outdir /tmp/nexora-comic-pilot

@@ -1,0 +1,15 @@
+{
+  "name": "nexora-comic-gateway-pilot",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Staged Cloudflare pilot for NEXORA V1; no external comic providers or VVIP content",
+  "scripts": {
+    "test": "node --test src/worker.test.mjs",
+    "check": "node --check src/worker.mjs",
+    "deploy": "wrangler deploy"
+  },
+  "devDependencies": {
+    "wrangler": "4.45.0"
+  }
+}
