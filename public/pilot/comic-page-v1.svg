@@ -1,0 +1,45 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="640" height="1480" viewBox="0 0 640 1480" role="img" aria-labelledby="title desc">
+  <title id="title">NEXORA original comic-style image transfer test</title>
+  <desc id="desc">A self-created series of abstract panels with colored hills and geometric shapes, for testing Cloudflare static image delivery.</desc>
+  <defs>
+    <linearGradient id="sky" x2="1" y2="1"><stop stop-color="#263b92"/><stop offset="1" stop-color="#17beb1"/></linearGradient>
+    <linearGradient id="dusk" x2="0" y2="1"><stop stop-color="#fdca79"/><stop offset="1" stop-color="#ef768f"/></linearGradient>
+    <linearGradient id="sea" x2="0" y2="1"><stop stop-color="#3f83c4"/><stop offset="1" stop-color="#1fbaaa"/></linearGradient>
+  </defs>
+  <rect width="640" height="1480" fill="#f5f7fb"/>
+  <rect x="24" y="24" width="592" height="74" rx="18" fill="#152449"/>
+  <text x="320" y="69" fill="white" font-family="system-ui, sans-serif" font-size="29" font-weight="700" text-anchor="middle">NEXORA • STATIC ASSET PILOT</text>
+  <g transform="translate(24 120)">
+    <rect width="592" height="345" rx="16" fill="url(#sky)"/>
+    <circle cx="466" cy="84" r="41" fill="#ffeba7"/>
+    <path d="M0 259 129 130 251 239 366 107 592 305V345H0Z" fill="#243f85"/>
+    <path d="m0 306 158-118 145 117 153-126 136 94v72H0Z" fill="#1a756d"/>
+    <path d="M0 315Q170 278 316 314T592 302V345H0Z" fill="#51bb9f"/>
+    <text x="28" y="47" fill="#fff" font-family="system-ui, sans-serif" font-size="20" font-weight="700">PANEL 01 • BUKTI PENGIRIMAN</text>
+  </g>
+  <g transform="translate(24 485)">
+    <rect width="284" height="316" rx="16" fill="url(#dusk)"/>
+    <circle cx="199" cy="98" r="55" fill="#fff1d5" opacity=".8"/>
+    <path d="M0 241 88 161 176 256 284 147V316H0Z" fill="#9d547f"/>
+    <path d="M0 275 108 224 215 282 284 249V316H0Z" fill="#5c538c"/>
+    <text x="20" y="36" fill="#473c66" font-family="system-ui, sans-serif" font-size="19" font-weight="700">02 • NO R2</text>
+  </g>
+  <g transform="translate(332 485)">
+    <rect width="284" height="316" rx="16" fill="#1d526d"/>
+    <circle cx="139" cy="133" r="70" fill="#51c6be"/>
+    <circle cx="139" cy="133" r="47" fill="#175c74"/>
+    <path d="M38 254Q143 193 245 254" fill="none" stroke="#d3fbe8" stroke-width="19" stroke-linecap="round"/>
+    <text x="20" y="36" fill="white" font-family="system-ui, sans-serif" font-size="19" font-weight="700">03 • NO VVIP</text>
+  </g>
+  <g transform="translate(24 821)">
+    <rect width="592" height="494" rx="16" fill="url(#sea)"/>
+    <path d="M0 281q154-100 303 10t289-16v219H0Z" fill="#155887"/>
+    <path d="M0 340q131-95 293 2t299-6v158H0Z" fill="#213c72"/>
+    <path d="M0 415q164-95 320 8t272-2v73H0Z" fill="#182d5a"/>
+    <g fill="#d4fff7" opacity=".9"><circle cx="123" cy="112" r="8"/><circle cx="420" cy="88" r="11"/><circle cx="488" cy="139" r="5"/></g>
+    <text x="26" y="49" fill="white" font-family="system-ui, sans-serif" font-size="22" font-weight="700">04 • PUBLIC DEMO ONLY</text>
+    <text x="296" y="457" text-anchor="middle" fill="#e7fffa" font-family="system-ui, sans-serif" font-size="19">Cloudflare Static Assets · Free pilot</text>
+  </g>
+  <text x="320" y="1384" text-anchor="middle" fill="#26344f" font-family="system-ui, sans-serif" font-size="18">Owned synthetic test • No external comic provider</text>
+  <text x="320" y="1421" text-anchor="middle" fill="#66748e" font-family="system-ui, sans-serif" font-size="15">Version 1 — publish a new filename for every content change</text>
+</svg>
