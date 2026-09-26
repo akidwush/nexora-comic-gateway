@@ -1,0 +1,31 @@
+import assert from "node:assert/strict";
+import test from "node:test";
+import fs from "node:fs";
+import path from "node:path";
+const root=new URL("../",import.meta.url);
+const read=file=>fs.readFileSync(new URL(file,root),"utf8");
+test("only explicit public test assets are statically published",()=>{
+ const cfg=JSON.parse(read("wrangler.jsonc"));
+ assert.equal(cfg.assets.directory,"./public");
+ assert.equal(cfg.assets.run_worker_first.includes("/v1/*"),true,"signed endpoint must run Worker before any asset");
+ assert.equal(cfg.assets.run_worker_first.includes("/health"),true);
+ assert.equal(cfg.assets.run_worker_first.includes("/fixture/*"),true);
+ assert.equal(cfg.vars.ENABLE_IMAGE_DELIVERY,"false");
+ assert.equal(cfg.assets.not_found_handling,"none");
+ const assetFiles=fs.readdirSync(new URL("public/pilot/",root));
+ assert.deepEqual(assetFiles,["comic-page-v1.svg"],"No third-party or VVIP content can be accidentally bundled as public");
+ assert.deepEqual(fs.readdirSync(new URL("public/",root)).sort(),["_headers","pilot"]);
+ const art=read("public/pilot/comic-page-v1.svg");
+ assert.match(art,/<svg\b/);
+ assert.match(art,/NEXORA/);
+ assert.doesNotMatch(art,/<script\b|<foreignObject\b|https?:\/\/|(?:href|src)\s*=/i);
+ assert.ok(Buffer.byteLength(art)<25000,"Keep synthetic fixture tiny");
+});
+test("public fixture has explicit safe headers and cannot override dynamic auth",()=>{
+ const rules=read("public/_headers");
+ assert.match(rules,/\/pilot\/\*/);
+ assert.match(rules,/Cache-Control:\s*public, max-age=604800, immutable/);
+ assert.match(rules,/Content-Security-Policy:[^\n]*sandbox/);
+ assert.match(rules,/X-Content-Type-Options:\s*nosniff/);
+ assert.doesNotMatch(rules,/\/v1\/|\/health|(?:^|\n)\/\*(?:\s|$)/, "Never cache dynamic or VVIP routes with a top-level wildcard rule");
+});

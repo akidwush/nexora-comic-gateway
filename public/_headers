@@ -1,0 +1,8 @@
+# Only these repository-owned, explicitly public fixtures are immutable.
+# No private images or signed URLs are allowed under public/.
+/pilot/*
+  Cache-Control: public, max-age=604800, immutable
+  X-Content-Type-Options: nosniff
+  Content-Security-Policy: default-src 'none'; style-src 'none'; sandbox
+  Cross-Origin-Resource-Policy: cross-origin
+  X-Robots-Tag: noindex

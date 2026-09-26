@@ -49,7 +49,7 @@ async function handle(request,env={}) {
   if(method!=="GET"&&method!=="HEAD")
     return responseJson({ok:false,error:"METHOD_NOT_ALLOWED"},405,{"Allow":"GET, HEAD"});
   if(url.pathname==="/health") {
-    const body={ok:true,service:"nexora-comic-gateway-pilot",stage:1,externalProviders:false,vvip:false,
+    const body={ok:true,service:"nexora-comic-gateway-pilot",stage:2,staticAssetsEnabled:true,externalProviders:false,vvip:false,
       imageDeliveryEnabled:env.ENABLE_IMAGE_DELIVERY==="true" && Boolean(env.IMAGE_BUCKET&&env.GATEWAY_HMAC_SECRET)};
     return method==="HEAD"?new Response(null,{status:200,headers:{"Cache-Control":"no-store"}}):responseJson(body);
   }

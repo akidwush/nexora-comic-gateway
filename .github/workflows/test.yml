@@ -23,3 +23,22 @@ jobs:
         run: npm test
       - name: Verify Wrangler bundle without deployment
         run: npx wrangler deploy --dry-run --outdir /tmp/nexora-comic-pilot
+      - name: Smoke-test local Static Assets delivery (no Cloudflare account)
+        run: |
+          set -eu
+          npx wrangler dev --local --ip 127.0.0.1 --port 8791 >/tmp/nexora-stage2-dev.log 2>&1 &
+          PID=$!
+          trap 'kill "$PID" 2>/dev/null || true' EXIT
+          READY=0
+          for i in $(seq 1 40); do
+            if curl --fail --silent http://127.0.0.1:8791/health -o /tmp/nexora-health.json; then READY=1; break; fi
+            sleep 1
+          done
+          if [ "$READY" != 1 ]; then cat /tmp/nexora-stage2-dev.log; exit 1; fi
+          grep -q '"stage":2' /tmp/nexora-health.json
+          curl --fail --silent --show-error -D /tmp/nexora-asset-headers.txt http://127.0.0.1:8791/pilot/comic-page-v1.svg -o /tmp/nexora-asset.svg
+          grep -q 'NEXORA' /tmp/nexora-asset.svg
+          grep -qi 'content-type:.*image/svg+xml' /tmp/nexora-asset-headers.txt
+          grep -qi 'cache-control:.*immutable' /tmp/nexora-asset-headers.txt
+          test "$(curl --silent -o /dev/null -w '%{http_code}' 'http://127.0.0.1:8791/v1/image')" = "503"
+          echo "Stage 2: static fixture served, dynamic health verified, gated route disabled."
