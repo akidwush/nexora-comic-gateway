@@ -134,6 +134,22 @@ test("observability emits safe metadata only",async()=>{
   const logs=[];const url=await signedUrl("ainzscans","https://cdn.ainzscans01.com/a.jpg");
   const {response}=await invoke(url,{logs});assert.equal(response.status,200);assert.equal(logs.length,1);
   assert.match(logs[0],/"source":"ainzscans"/);assert.match(logs[0],/"cache":"MISS"/);
+  assert.match(logs[0],/"errorCode":null/);assert.match(logs[0],/"upstreamStatus":null/);
   assert.doesNotMatch(logs[0],/ticket|signature|sig|secret|authorization|cookie/i);
   assert.equal(logs[0].includes(new URL(url).searchParams.get("sig")),false);
+});
+
+test("failed public image log includes safe diagnostics without signed request data",async()=>{
+  const logs=[];
+  const target="https://cdn.mangadot.net/private/chapter-42.webp";
+  const url=await signedUrl("mangadotnet",target);
+  const {response}=await invoke(url,{logs,fetchImpl:async()=>new Response("forbidden",{status:403})});
+  assert.equal(response.status,502);assert.deepEqual(await response.json(),{ok:false,error:"UPSTREAM_FAILED"});assert.equal(logs.length,1);
+  const row=JSON.parse(logs[0]);
+  assert.equal(row.event,"public-image");assert.equal(row.source,"mangadotnet");assert.equal(row.status,502);
+  assert.equal(row.cache,"MISS");assert.equal(row.bytes,0);assert.equal(typeof row.latencyMs,"number");
+  assert.equal(row.errorCode,"UPSTREAM_FAILED");assert.equal(row.upstreamStatus,403);
+  const parsed=new URL(url);
+  for(const sensitive of ["ticket","sig",TEST_SECRET,target,parsed.searchParams.get("ticket"),parsed.searchParams.get("sig")])
+    assert.equal(logs[0].includes(sensitive),false,sensitive);
 });
