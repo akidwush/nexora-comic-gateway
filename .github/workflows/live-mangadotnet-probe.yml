@@ -1,0 +1,53 @@
+name: Temporary MangaDotNet Production Probe
+on:
+  pull_request:
+    branches: [main]
+permissions:
+  contents: read
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Probe production gateway without exposing signed URL
+        shell: bash
+        run: |
+          set -euo pipefail
+          health_url='https://nexora-comic-gateway.furinafontain001.workers.dev/health'
+          pages_url='https://all-tools-nexora-teal.vercel.app/api/comics?action=pages&source=mangadotnet&id=upload%3A2169880&mangaId=24328&quality=saver&mode=comic-reader'
+
+          health_json=$(curl --fail --silent --show-error --max-time 30 "$health_url")
+          printf '%s' "$health_json" | grep -q '"publicImageProxyEnabled":true'
+
+          pages_json=$(curl --fail --silent --show-error --max-time 30 "$pages_url")
+          gateway_url=$(printf '%s' "$pages_json" | node -e '
+            let s=""; process.stdin.on("data",d=>s+=d).on("end",()=>{
+              const root=JSON.parse(s);
+              let found="";
+              const walk=v=>{
+                if(found) return;
+                if(typeof v==="string" && v.startsWith("https://nexora-comic-gateway.furinafontain001.workers.dev/v1/public-image?")) { found=v; return; }
+                if(Array.isArray(v)) for(const x of v) walk(x);
+                else if(v && typeof v==="object") for(const x of Object.values(v)) walk(x);
+              };
+              walk(root);
+              if(!found) process.exit(2);
+              process.stdout.write(found);
+            });
+          ')
+
+          test -n "$gateway_url"
+
+          status1=$(curl --silent --show-error --max-time 30 -D /tmp/h1 -o /tmp/b1 -w '%{http_code}' "$gateway_url")
+          echo "first_status=$status1"
+          grep -i '^x-nexora-cache:' /tmp/h1 || true
+
+          if [ "$status1" != "200" ]; then
+            echo "first_body=$(cat /tmp/b1)"
+            exit 1
+          fi
+
+          sleep 1
+          status2=$(curl --silent --show-error --max-time 30 -D /tmp/h2 -o /tmp/b2 -w '%{http_code}' "$gateway_url")
+          echo "second_status=$status2"
+          grep -i '^x-nexora-cache:' /tmp/h2 || true
+          test "$status2" = "200"
