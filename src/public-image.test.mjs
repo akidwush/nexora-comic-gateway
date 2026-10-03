@@ -100,16 +100,17 @@ test("provider headers are fixed server-side and browser overrides are ignored",
   const seen=[];
   const fetchImpl=async(_url,options)=>{seen.push(options);return imageResponse();};
   const cases=[
-    ["shinigami","https://cdn.shngm.io/chapter/a.webp","https://app.shinigami.asia/","https://app.shinigami.asia"],
-    ["voratoon","https://cdn.voratoon.com/a.webp","https://v2.voratoon.com/","https://v2.voratoon.com"],
-    ["mangadotnet","https://cdn.mangadot.net/a.webp","https://mangadot.net/","https://mangadot.net"],
-    ["mangadex","https://uploads.mangadex.org/a.webp",undefined,undefined],
-    ["ainzscans","https://cdn.ainzscans01.com/a.webp",undefined,undefined]
+    ["shinigami","https://cdn.shngm.io/chapter/a.webp","https://app.shinigami.asia/","https://app.shinigami.asia",undefined,undefined],
+    ["voratoon","https://cdn.voratoon.com/a.webp","https://v2.voratoon.com/","https://v2.voratoon.com",undefined,undefined],
+    ["mangadotnet","https://cdn.mangadot.net/a.webp","https://mangadot.net/","https://mangadot.net","image/avif,image/webp,image/jpeg,image/*","All-Tools-Nexora-Comic-Reader/1.0 (+https://all-tools-nexora.vercel.app)"],
+    ["mangadex","https://uploads.mangadex.org/a.webp",undefined,undefined,undefined,undefined],
+    ["ainzscans","https://cdn.ainzscans01.com/a.webp",undefined,undefined,undefined,undefined]
   ];
-  for(const [source,target,referer,origin] of cases){
+  for(const [source,target,referer,origin,accept,userAgent] of cases){
     const {response}=await invoke(await signedUrl(source,target),{fetchImpl,headers:{Referer:"https://evil.example/",Origin:"https://evil.example"}});
     assert.equal(response.status,200);
     const options=seen.at(-1);assert.equal(options.headers.Referer,referer);assert.equal(options.headers.Origin,origin);assert.equal(options.redirect,"manual");
+    if(source==="mangadotnet"){assert.equal(options.headers.Accept,accept);assert.equal(options.headers["User-Agent"],userAgent);}
   }
 });
 
