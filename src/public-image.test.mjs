@@ -84,6 +84,17 @@ test("target validation rejects protocol, IP, userinfo, port, bad host and suffi
   }
 });
 
+test("Ainzscans current CDN hosts are allowed and suffix-confusion hosts are rejected",async()=>{
+  for(const target of ["https://yuucdn.com/pages/a.jpg","https://kacu.gmbr.pro/pages/a.jpg"]){
+    const {response}=await invoke(await signedUrl("ainzscans",target));
+    assert.equal(response.status,200,target);
+  }
+  for(const target of ["https://yuucdn.com.evil.example/pages/a.jpg","https://kacu.gmbr.pro.evil.example/pages/a.jpg"]){
+    const {response}=await invoke(await signedUrl("ainzscans",target));
+    assert.equal(response.status,403,target);
+  }
+});
+
 test("redirects, bad MIME, declared oversize, and streamed oversize fail closed",async()=>{
   const url=await signedUrl("mangadex","https://uploads.mangadex.org/a.webp");
   assert.equal((await invoke(url,{fetchImpl:async()=>new Response(null,{status:302,headers:{Location:"https://evil.example/x"}})})).response.status,502);
@@ -104,7 +115,7 @@ test("provider headers are fixed server-side and browser overrides are ignored",
     ["voratoon","https://cdn.voratoon.com/a.webp","https://v2.voratoon.com/","https://v2.voratoon.com",undefined,undefined],
     ["mangadotnet","https://cdn.mangadot.net/a.webp","https://mangadot.net/","https://mangadot.net","image/avif,image/webp,image/jpeg,image/*","All-Tools-Nexora-Comic-Reader/1.0 (+https://all-tools-nexora.vercel.app)"],
     ["mangadex","https://uploads.mangadex.org/a.webp",undefined,undefined,undefined,undefined],
-    ["ainzscans","https://cdn.ainzscans01.com/a.webp",undefined,undefined,undefined,undefined]
+    ["ainzscans","https://yuucdn.com/a.webp",undefined,undefined,undefined,undefined]
   ];
   for(const [source,target,referer,origin,accept,userAgent] of cases){
     const {response}=await invoke(await signedUrl(source,target),{fetchImpl,headers:{Referer:"https://evil.example/",Origin:"https://evil.example"}});
@@ -132,7 +143,7 @@ test("feature flag and Stage 2 endpoint remain fail closed",async()=>{
 });
 
 test("observability emits safe metadata only",async()=>{
-  const logs=[];const url=await signedUrl("ainzscans","https://cdn.ainzscans01.com/a.jpg");
+  const logs=[];const url=await signedUrl("ainzscans","https://kacu.gmbr.pro/a.jpg");
   const {response}=await invoke(url,{logs});assert.equal(response.status,200);assert.equal(logs.length,1);
   assert.match(logs[0],/"source":"ainzscans"/);assert.match(logs[0],/"cache":"MISS"/);
   assert.match(logs[0],/"errorCode":null/);assert.match(logs[0],/"upstreamStatus":null/);
