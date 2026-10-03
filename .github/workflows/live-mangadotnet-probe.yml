@@ -1,4 +1,4 @@
-name: Temporary MangaDotNet Production Probe
+name: Temporary V1 MangaDotNet Legacy Production Probe
 on:
   pull_request:
     branches: [main]
@@ -8,54 +8,44 @@ jobs:
   probe:
     runs-on: ubuntu-latest
     steps:
-      - name: Probe production gateway without exposing signed URL
+      - name: Verify V1 production keeps MangaDotNet off Cloudflare
         shell: bash
         run: |
           set -euo pipefail
-          health_url='https://nexora-comic-gateway.furinafontain001.workers.dev/health'
-          pages_url='https://all-tools-nexora-teal.vercel.app/api/comics?action=pages&source=mangadotnet&id=upload%3A2169880&mangaId=24328&quality=saver&mode=comic-reader'
-
-          health_status=$(curl --silent --show-error --max-time 30 -o /tmp/health.json -w '%{http_code}' "$health_url")
-          echo "health_status=$health_status"
-          test "$health_status" = "200"
-          grep -q '"publicImageProxyEnabled":true' /tmp/health.json
+          origin='https://all-tools-nexora-teal.vercel.app'
+          pages_url="$origin/api/comics?action=pages&source=mangadotnet&id=upload%3A2169880&mangaId=24328&quality=saver&mode=comic-reader"
+          ua='Mozilla/5.0 (Linux; Android 15) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0 Mobile Safari/537.36'
 
           pages_status=$(curl --silent --show-error --max-time 30 -o /tmp/pages.json -w '%{http_code}' \
-            -H 'User-Agent: Mozilla/5.0 (Linux; Android 15) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0 Mobile Safari/537.36' \
-            -H 'Referer: https://all-tools-nexora-teal.vercel.app/' \
-            "$pages_url")
+            -H "User-Agent: $ua" -H "Referer: $origin/" "$pages_url")
           echo "pages_status=$pages_status"
           test "$pages_status" = "200"
-          pages_json=$(cat /tmp/pages.json)
-          gateway_url=$(printf '%s' "$pages_json" | node -e '
-            let s=""; process.stdin.on("data",d=>s+=d).on("end",()=>{
-              const root=JSON.parse(s);
-              let found="";
-              const walk=v=>{
-                if(found) return;
-                if(typeof v==="string" && v.startsWith("https://nexora-comic-gateway.furinafontain001.workers.dev/v1/public-image?")) { found=v; return; }
-                if(Array.isArray(v)) for(const x of v) walk(x);
-                else if(v && typeof v==="object") for(const x of Object.values(v)) walk(x);
-              };
-              walk(root);
-              if(!found) process.exit(2);
-              process.stdout.write(found);
-            });
-          ')
 
-          test -n "$gateway_url"
+          legacy_url=$(node - <<'NODE'
+          const fs=require("fs");
+          const root=JSON.parse(fs.readFileSync("/tmp/pages.json","utf8"));
+          let gateway=0, legacy=[];
+          const walk=v=>{
+            if(typeof v==="string"){
+              if(v.startsWith("https://nexora-comic-gateway.furinafontain001.workers.dev/v1/public-image?")) gateway++;
+              if(v.startsWith("/api/comics?action=page-image&source=mangadotnet")) legacy.push(v);
+              return;
+            }
+            if(Array.isArray(v)) for(const x of v) walk(x);
+            else if(v&&typeof v==="object") for(const x of Object.values(v)) walk(x);
+          };
+          walk(root);
+          console.error("gateway_url_count="+gateway);
+          console.error("legacy_url_count="+legacy.length);
+          if(gateway!==0||legacy.length<1) process.exit(2);
+          process.stdout.write(legacy[0]);
+          NODE
+          )
 
-          status1=$(curl --silent --show-error --max-time 30 -D /tmp/h1 -o /tmp/b1 -w '%{http_code}' "$gateway_url")
-          echo "first_status=$status1"
-          grep -i '^x-nexora-cache:' /tmp/h1 || true
-
-          if [ "$status1" != "200" ]; then
-            echo "first_body=$(cat /tmp/b1)"
-            exit 1
-          fi
-
-          sleep 1
-          status2=$(curl --silent --show-error --max-time 30 -D /tmp/h2 -o /tmp/b2 -w '%{http_code}' "$gateway_url")
-          echo "second_status=$status2"
-          grep -i '^x-nexora-cache:' /tmp/h2 || true
-          test "$status2" = "200"
+          image_status=$(curl --silent --show-error --max-time 30 -D /tmp/image-headers -o /tmp/image.bin -w '%{http_code}' \
+            -H "User-Agent: $ua" -H "Referer: $origin/" "$origin$legacy_url")
+          echo "image_status=$image_status"
+          test "$image_status" = "200"
+          grep -qi '^content-type: image/' /tmp/image-headers
+          test -s /tmp/image.bin
+          echo "MangaDotNet production delivery is direct Vercel legacy with no Cloudflare gateway URL."
