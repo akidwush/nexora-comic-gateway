@@ -11,6 +11,7 @@ test("only explicit public test assets are statically published",()=>{
  assert.equal(cfg.assets.run_worker_first.includes("/health"),true);
  assert.equal(cfg.assets.run_worker_first.includes("/fixture/*"),true);
  assert.equal(cfg.vars.ENABLE_IMAGE_DELIVERY,"false");
+ assert.equal(cfg.vars.ENABLE_PROVIDER_IMAGE_PROXY,"false");
  assert.equal(cfg.assets.not_found_handling,"none");
  const assetFiles=fs.readdirSync(new URL("public/pilot/",root));
  assert.deepEqual(assetFiles,["comic-page-v1.svg"],"No third-party or VVIP content can be accidentally bundled as public");

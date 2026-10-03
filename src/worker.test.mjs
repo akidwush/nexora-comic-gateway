@@ -14,7 +14,7 @@ function enabled(bucket) {return {ENABLE_IMAGE_DELIVERY:"true",GATEWAY_HMAC_SECR
 test("health and fixture work without secrets and never call external providers",async()=>{
  const h=await req("https://pilot.example.test/health");
  assert.equal(h.status,200);const status=await h.json();
- assert.equal(status.imageDeliveryEnabled,false);assert.equal(status.externalProviders,false);assert.equal(status.vvip,false);assert.equal(status.stage,2);assert.equal(status.staticAssetsEnabled,true);
+ assert.equal(status.imageDeliveryEnabled,false);assert.equal(status.publicImageProxyEnabled,false);assert.equal(status.externalProviders,false);assert.equal(status.vvip,false);assert.equal(status.stage,3);assert.equal(status.staticAssetsEnabled,true);
  const fixture=await req(svg);
  assert.equal(fixture.status,200);assert.match(fixture.headers.get("content-type"),/image\/svg\+xml/);
  assert.match(await fixture.text(),/NEXORA/);
