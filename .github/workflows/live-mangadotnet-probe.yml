@@ -15,10 +15,18 @@ jobs:
           health_url='https://nexora-comic-gateway.furinafontain001.workers.dev/health'
           pages_url='https://all-tools-nexora-teal.vercel.app/api/comics?action=pages&source=mangadotnet&id=upload%3A2169880&mangaId=24328&quality=saver&mode=comic-reader'
 
-          health_json=$(curl --fail --silent --show-error --max-time 30 "$health_url")
-          printf '%s' "$health_json" | grep -q '"publicImageProxyEnabled":true'
+          health_status=$(curl --silent --show-error --max-time 30 -o /tmp/health.json -w '%{http_code}' "$health_url")
+          echo "health_status=$health_status"
+          test "$health_status" = "200"
+          grep -q '"publicImageProxyEnabled":true' /tmp/health.json
 
-          pages_json=$(curl --fail --silent --show-error --max-time 30 "$pages_url")
+          pages_status=$(curl --silent --show-error --max-time 30 -o /tmp/pages.json -w '%{http_code}' \
+            -H 'User-Agent: Mozilla/5.0 (Linux; Android 15) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0 Mobile Safari/537.36' \
+            -H 'Referer: https://all-tools-nexora-teal.vercel.app/' \
+            "$pages_url")
+          echo "pages_status=$pages_status"
+          test "$pages_status" = "200"
+          pages_json=$(cat /tmp/pages.json)
           gateway_url=$(printf '%s' "$pages_json" | node -e '
             let s=""; process.stdin.on("data",d=>s+=d).on("end",()=>{
               const root=JSON.parse(s);
