@@ -142,33 +142,34 @@ async function readBoundedBody(response,maximumBytes=MAX_IMAGE_BYTES) {
   for(const chunk of chunks){body.set(chunk,offset);offset+=chunk.byteLength;}
   return body;
 }
-function safeLog(log,source,status,cache,bytes,started) {
-  const row={event:"public-image",source:PUBLIC_PROVIDER_POLICIES[source]?source:"unknown",status:Number(status)||500,cache:cache||"BYPASS",bytes:Math.max(0,Number(bytes)||0),latencyMs:Math.max(0,Date.now()-started)};
+function safeLog(log,source,status,cache,bytes,started,errorCode,upstreamStatus) {
+  const normalizedUpstreamStatus=Number(upstreamStatus);
+  const row={event:"public-image",source:PUBLIC_PROVIDER_POLICIES[source]?source:"unknown",status:Number(status)||500,cache:cache||"BYPASS",bytes:Math.max(0,Number(bytes)||0),latencyMs:Math.max(0,Date.now()-started),errorCode:typeof errorCode==="string"?errorCode:null,upstreamStatus:Number.isInteger(normalizedUpstreamStatus)&&normalizedUpstreamStatus>=100&&normalizedUpstreamStatus<=599?normalizedUpstreamStatus:null};
   try {log(JSON.stringify(row));} catch {}
 }
 async function handlePublicImage(request,env,context={},dependencies={}) {
   const started=Date.now();
   const log=typeof dependencies.log==="function"?dependencies.log:console.info;
-  let source="unknown",cacheStatus="BYPASS",byteSize=0,response;
+  let source="unknown",cacheStatus="BYPASS",byteSize=0,response,errorCode=null,upstreamStatus=null;
   try {
-    if(env.ENABLE_PROVIDER_IMAGE_PROXY!=="true")return response=responseJson({ok:false,error:"PROVIDER_IMAGE_PROXY_DISABLED"},503);
-    if(!secretIsValid(env.COMIC_GATEWAY_SIGNING_SECRET))return response=responseJson({ok:false,error:"CONFIGURATION_UNAVAILABLE"},503);
+    if(env.ENABLE_PROVIDER_IMAGE_PROXY!=="true"){errorCode="PROVIDER_IMAGE_PROXY_DISABLED";return response=responseJson({ok:false,error:"PROVIDER_IMAGE_PROXY_DISABLED"},503);}
+    if(!secretIsValid(env.COMIC_GATEWAY_SIGNING_SECRET)){errorCode="CONFIGURATION_UNAVAILABLE";return response=responseJson({ok:false,error:"CONFIGURATION_UNAVAILABLE"},503);}
     const requestUrl=new URL(request.url);
     const ticket=requestUrl.searchParams.get("ticket");
     const sig=requestUrl.searchParams.get("sig");
-    if(!ticket||!sig||!base64UrlToBytes(sig,32))return response=responseJson({ok:false,error:"INVALID_IMAGE_REQUEST"},400);
+    if(!ticket||!sig||!base64UrlToBytes(sig,32)){errorCode="INVALID_IMAGE_REQUEST";return response=responseJson({ok:false,error:"INVALID_IMAGE_REQUEST"},400);}
     // Verify the exact encoded payload before parsing or using any of its fields.
-    if(!(await validPublicImageSignature(env.COMIC_GATEWAY_SIGNING_SECRET,ticket,sig)))return response=responseJson({ok:false,error:"SIGNATURE_INVALID"},403);
+    if(!(await validPublicImageSignature(env.COMIC_GATEWAY_SIGNING_SECRET,ticket,sig))){errorCode="SIGNATURE_INVALID";return response=responseJson({ok:false,error:"SIGNATURE_INVALID"},403);}
     const payload=decodePublicImageTicket(ticket);
     if(!payload||payload.v!==1||typeof payload.src!=="string"||typeof payload.url!=="string"||typeof payload.policy!=="string"||!Number.isSafeInteger(payload.exp))
-      return response=responseJson({ok:false,error:"INVALID_IMAGE_TICKET"},400);
+      {errorCode="INVALID_IMAGE_TICKET";return response=responseJson({ok:false,error:"INVALID_IMAGE_TICKET"},400);}
     source=payload.src;
     const now=Math.floor((typeof dependencies.now==="function"?dependencies.now():Date.now())/1000);
-    if(payload.exp<=now)return response=responseJson({ok:false,error:"SIGNED_URL_EXPIRED"},403);
-    if(payload.exp>now+MAX_SIGNATURE_LIFETIME_SECONDS)return response=responseJson({ok:false,error:"SIGNED_URL_TOO_LONG"},403);
-    if(EXCLUDED_SOURCES.has(source))return response=responseJson({ok:false,error:"SOURCE_NOT_ALLOWED"},403);
+    if(payload.exp<=now){errorCode="SIGNED_URL_EXPIRED";return response=responseJson({ok:false,error:"SIGNED_URL_EXPIRED"},403);}
+    if(payload.exp>now+MAX_SIGNATURE_LIFETIME_SECONDS){errorCode="SIGNED_URL_TOO_LONG";return response=responseJson({ok:false,error:"SIGNED_URL_TOO_LONG"},403);}
+    if(EXCLUDED_SOURCES.has(source)){errorCode="SOURCE_NOT_ALLOWED";return response=responseJson({ok:false,error:"SOURCE_NOT_ALLOWED"},403);}
     const validated=validatePublicTarget(source,payload.url,payload.policy);
-    if(!validated)return response=responseJson({ok:false,error:"TARGET_NOT_ALLOWED"},403);
+    if(!validated){errorCode="TARGET_NOT_ALLOWED";return response=responseJson({ok:false,error:"TARGET_NOT_ALLOWED"},403);}
 
     const cache=dependencies.cache||globalThis.caches?.default;
     if(cache)cacheStatus="MISS";
@@ -187,7 +188,7 @@ async function handlePublicImage(request,env,context={},dependencies={}) {
     }
 
     const fetchImpl=dependencies.fetchImpl||globalThis.fetch;
-    if(typeof fetchImpl!=="function")return response=responseJson({ok:false,error:"UPSTREAM_UNAVAILABLE"},503);
+    if(typeof fetchImpl!=="function"){errorCode="UPSTREAM_UNAVAILABLE";return response=responseJson({ok:false,error:"UPSTREAM_UNAVAILABLE"},503);}
     const controller=new AbortController();
     const timer=setTimeout(()=>controller.abort(),20_000);
     let upstream;
@@ -199,14 +200,15 @@ async function handlePublicImage(request,env,context={},dependencies={}) {
         headers:{Accept:"image/avif,image/webp,image/png,image/jpeg","User-Agent":"NEXORA-Comic-Gateway/1.0",...validated.policy.headers}
       });
     } catch {
+      errorCode="UPSTREAM_UNAVAILABLE";
       return response=responseJson({ok:false,error:"UPSTREAM_UNAVAILABLE"},502);
     } finally {clearTimeout(timer);}
-    if(upstream.type==="opaqueredirect"||(upstream.status>=300&&upstream.status<400))return response=responseJson({ok:false,error:"UPSTREAM_REDIRECT_REJECTED"},502);
-    if(upstream.status<200||upstream.status>=300)return response=responseJson({ok:false,error:"UPSTREAM_FAILED"},upstream.status===404?404:502);
+    if(upstream.type==="opaqueredirect"||(upstream.status>=300&&upstream.status<400)){errorCode="UPSTREAM_REDIRECT_REJECTED";upstreamStatus=upstream.status;return response=responseJson({ok:false,error:"UPSTREAM_REDIRECT_REJECTED"},502);}
+    if(upstream.status<200||upstream.status>=300){errorCode="UPSTREAM_FAILED";upstreamStatus=upstream.status;return response=responseJson({ok:false,error:"UPSTREAM_FAILED"},upstream.status===404?404:502);}
     const contentType=String(upstream.headers.get("content-type")||"").split(";",1)[0].trim().toLowerCase();
-    if(!ALLOWED_IMAGE_MIME.has(contentType))return response=responseJson({ok:false,error:"IMAGE_TYPE_INVALID"},415);
+    if(!ALLOWED_IMAGE_MIME.has(contentType)){errorCode="IMAGE_TYPE_INVALID";upstreamStatus=upstream.status;return response=responseJson({ok:false,error:"IMAGE_TYPE_INVALID"},415);}
     const declaredLength=String(upstream.headers.get("content-length")||"").trim();
-    if(declaredLength&&(!/^\d+$/.test(declaredLength)||Number(declaredLength)>MAX_IMAGE_BYTES))return response=responseJson({ok:false,error:"IMAGE_SIZE_INVALID"},413);
+    if(declaredLength&&(!/^\d+$/.test(declaredLength)||Number(declaredLength)>MAX_IMAGE_BYTES)){errorCode="IMAGE_SIZE_INVALID";upstreamStatus=upstream.status;return response=responseJson({ok:false,error:"IMAGE_SIZE_INVALID"},413);}
     if(request.method==="HEAD"){
       byteSize=declaredLength?Number(declaredLength):0;
       response=new Response(null,{status:200,headers:publicImageHeaders(contentType,declaredLength?byteSize:null,"MISS")});
@@ -214,7 +216,10 @@ async function handlePublicImage(request,env,context={},dependencies={}) {
     }
     let body;
     try {body=await readBoundedBody(upstream);}
-    catch(error){return response=responseJson({ok:false,error:error?.code||"UPSTREAM_READ_FAILED"},Number(error?.status)||502);}
+    catch(error){
+      errorCode=error?.code||"UPSTREAM_READ_FAILED";upstreamStatus=upstream.status;
+      return response=responseJson({ok:false,error:errorCode},Number(error?.status)||502);
+    }
     byteSize=body.byteLength;
     const headers=publicImageHeaders(contentType,byteSize,"MISS");
     response=new Response(body,{status:200,headers});
@@ -226,9 +231,10 @@ async function handlePublicImage(request,env,context={},dependencies={}) {
     }
     return response;
   } catch {
+    errorCode="GATEWAY_FAILED";
     return response=responseJson({ok:false,error:"GATEWAY_FAILED"},500);
   } finally {
-    safeLog(log,source,response?.status||500,cacheStatus,byteSize,started);
+    safeLog(log,source,response?.status||500,cacheStatus,byteSize,started,errorCode,upstreamStatus);
   }
 }
 async function handle(request,env={},context={},dependencies={}) {
