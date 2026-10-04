@@ -7,7 +7,8 @@
   "keep_vars": true,
   "vars": {
     "ENABLE_IMAGE_DELIVERY": "false",
-    "ENABLE_PROVIDER_IMAGE_PROXY": "true"
+    "ENABLE_PROVIDER_IMAGE_PROXY": "true",
+    "NEXORA_V1_ORIGIN_URL": "https://all-tools-nexora-teal.vercel.app"
   },
   "observability": {
     "enabled": true
