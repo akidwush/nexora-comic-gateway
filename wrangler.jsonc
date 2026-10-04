@@ -6,7 +6,8 @@
   "workers_dev": true,
   "keep_vars": true,
   "vars": {
-    "ENABLE_IMAGE_DELIVERY": "false"
+    "ENABLE_IMAGE_DELIVERY": "false",
+    "ENABLE_PROVIDER_IMAGE_PROXY": "true"
   },
   "observability": {
     "enabled": true
