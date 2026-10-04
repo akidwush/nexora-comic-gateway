@@ -112,7 +112,7 @@ test("provider headers are fixed server-side and browser overrides are ignored",
   const fetchImpl=async(_url,options)=>{seen.push(options);return imageResponse();};
   const cases=[
     ["shinigami","https://cdn.shngm.io/chapter/a.webp","https://app.shinigami.asia/","https://app.shinigami.asia",undefined,undefined],
-    ["voratoon","https://cdn.voratoon.com/a.webp","https://v2.voratoon.com/","https://v2.voratoon.com",undefined,undefined],
+    ["voratoon","https://cdn.voratoon.com/a.webp","https://v5.voratoon.com/","https://v5.voratoon.com",undefined,undefined],
     ["mangadotnet","https://cdn.mangadot.net/a.webp","https://mangadot.net/","https://mangadot.net","image/avif,image/webp,image/jpeg,image/*","All-Tools-Nexora-Comic-Reader/1.0 (+https://all-tools-nexora.vercel.app)"],
     ["mangadex","https://uploads.mangadex.org/a.webp",undefined,undefined,undefined,undefined],
     ["ainzscans","https://yuucdn.com/a.webp",undefined,undefined,undefined,undefined]
