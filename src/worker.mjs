@@ -11,7 +11,7 @@ const EXCLUDED_SOURCES = new Set(["manhwadesu", "doujindesu", "manhwaland"]);
 const PUBLIC_PROVIDER_POLICIES = Object.freeze({
   mangadex: Object.freeze({id:"mangadex-v1",hosts:[".mangadex.network", ".mangadex.org"],headers:Object.freeze({})}),
   shinigami: Object.freeze({id:"shinigami-v1",hosts:[".shngm.io", ".shngm.id", ".shinigami.asia"],headers:Object.freeze({Referer:"https://app.shinigami.asia/",Origin:"https://app.shinigami.asia"})}),
-  voratoon: Object.freeze({id:"voratoon-v1",hosts:[".voratoon.com"],headers:Object.freeze({Referer:"https://v2.voratoon.com/",Origin:"https://v2.voratoon.com"})}),
+  voratoon: Object.freeze({id:"voratoon-v1",hosts:[".voratoon.com"],headers:Object.freeze({Referer:"https://v5.voratoon.com/",Origin:"https://v5.voratoon.com"})}),
   ainzscans: Object.freeze({id:"ainzscans-v1",hosts:[".ainzscans01.com","yuucdn.com","kacu.gmbr.pro"],headers:Object.freeze({})}),
   mangadotnet: Object.freeze({id:"mangadotnet-v1",hosts:["mangadot.net"],headers:Object.freeze({Accept:"image/avif,image/webp,image/jpeg,image/*","User-Agent":"All-Tools-Nexora-Comic-Reader/1.0 (+https://all-tools-nexora.vercel.app)",Referer:"https://mangadot.net/",Origin:"https://mangadot.net"})})
 });
