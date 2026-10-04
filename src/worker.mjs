@@ -4,6 +4,8 @@ const MAX_IMAGE_BYTES = 8_000_000;
 const MAX_SIGNATURE_LIFETIME_SECONDS = 300;
 const PUBLIC_IMAGE_EDGE_TTL_SECONDS = 3_600;
 const PUBLIC_IMAGE_BROWSER_TTL_SECONDS = 300;
+const MANGADOTNET_ORIGIN_AUTH_HEADER = "X-Nexora-Origin-Auth";
+const MANGADOTNET_ORIGIN_AUTH_CONTEXT = "nexora-mangadotnet-origin-v1";
 const FIXTURE_SVG = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 480 280" role="img" aria-label="NEXORA Cloudflare pilot"><defs><linearGradient id="g"><stop stop-color="#2547b0"/><stop offset="1" stop-color="#12b9a8"/></linearGradient></defs><rect width="480" height="280" rx="24" fill="url(#g)"/><text x="240" y="131" text-anchor="middle" fill="white" font-family="sans-serif" font-weight="bold" font-size="34">NEXORA</text><text x="240" y="171" text-anchor="middle" fill="white" font-family="sans-serif" font-size="18">Cloudflare gateway pilot</text></svg>';
 const MIME = Object.freeze({png:"image/png",jpg:"image/jpeg",jpeg:"image/jpeg",webp:"image/webp",avif:"image/avif"});
 const ALLOWED_IMAGE_MIME = new Set(Object.values(MIME));
@@ -51,6 +53,23 @@ async function validPublicImageSignature(secret,ticket,sig) {
   const encoder=new TextEncoder();
   const hmacKey=await crypto.subtle.importKey("raw",encoder.encode(secret),{name:"HMAC",hash:"SHA-256"},false,["verify"]);
   return crypto.subtle.verify("HMAC",hmacKey,signature,encoder.encode(ticket));
+}
+async function mangaDotNetOriginAuth(secret,ticket,sig) {
+  if(!secretIsValid(secret)||typeof ticket!=="string"||ticket.length<1||ticket.length>6000||!/^[A-Za-z0-9_-]+$/.test(ticket)||typeof sig!=="string"||!/^[A-Za-z0-9_-]{43}$/.test(sig))return null;
+  const encoder=new TextEncoder();
+  const hmacKey=await crypto.subtle.importKey("raw",encoder.encode(secret),{name:"HMAC",hash:"SHA-256"},false,["sign"]);
+  const message=`${MANGADOTNET_ORIGIN_AUTH_CONTEXT}\n${ticket}\n${sig}`;
+  return bytesToBase64Url(new Uint8Array(await crypto.subtle.sign("HMAC",hmacKey,encoder.encode(message))));
+}
+function mangaDotNetOriginUrl(baseUrl) {
+  if(typeof baseUrl!=="string"||!baseUrl.trim())return null;
+  try {
+    const base=new URL(baseUrl);
+    if(base.protocol!=="https:"||base.username||base.password||base.port||base.search||base.hash)return null;
+    const endpoint=new URL("/api/comics",base.origin);
+    endpoint.searchParams.set("action","mangadotnet-origin");
+    return endpoint;
+  } catch {return null;}
 }
 function decodePublicImageTicket(ticket) {
   const bytes=base64UrlToBytes(ticket);
@@ -189,15 +208,25 @@ async function handlePublicImage(request,env,context={},dependencies={}) {
 
     const fetchImpl=dependencies.fetchImpl||globalThis.fetch;
     if(typeof fetchImpl!=="function"){errorCode="UPSTREAM_UNAVAILABLE";return response=responseJson({ok:false,error:"UPSTREAM_UNAVAILABLE"},503);}
+    let upstreamUrl=validated.target.toString();
+    let upstreamHeaders={Accept:"image/avif,image/webp,image/png,image/jpeg","User-Agent":"NEXORA-Comic-Gateway/1.0",...validated.policy.headers};
+    if(source==="mangadotnet"){
+      if(request.method==="HEAD"){errorCode="ORIGIN_CACHE_MISS";return response=responseJson({ok:false,error:"ORIGIN_CACHE_MISS"},404);}
+      const originUrl=mangaDotNetOriginUrl(env.NEXORA_V1_ORIGIN_URL);
+      const originAuth=await mangaDotNetOriginAuth(env.COMIC_GATEWAY_SIGNING_SECRET,ticket,sig);
+      if(!originUrl||!originAuth){errorCode="ORIGIN_SHIELD_UNAVAILABLE";return response=responseJson({ok:false,error:"ORIGIN_SHIELD_UNAVAILABLE"},503);}
+      upstreamUrl=originUrl.toString();
+      upstreamHeaders={Accept:"image/avif,image/webp,image/png,image/jpeg",[MANGADOTNET_ORIGIN_AUTH_HEADER]:originAuth,"X-Nexora-Origin-Ticket":ticket,"X-Nexora-Origin-Signature":sig};
+    }
     const controller=new AbortController();
     const timer=setTimeout(()=>controller.abort(),20_000);
     let upstream;
     try {
-      upstream=await fetchImpl(validated.target.toString(),{
-        method:request.method,
+      upstream=await fetchImpl(upstreamUrl,{
+        method:source==="mangadotnet"?"GET":request.method,
         redirect:"manual",
         signal:controller.signal,
-        headers:{Accept:"image/avif,image/webp,image/png,image/jpeg","User-Agent":"NEXORA-Comic-Gateway/1.0",...validated.policy.headers}
+        headers:upstreamHeaders
       });
     } catch {
       errorCode="UPSTREAM_UNAVAILABLE";
@@ -279,4 +308,4 @@ async function handle(request,env={},context={},dependencies={}) {
   return new Response(method==="HEAD"?null:object.body,{status:200,headers:imageHeaders(key,object.size)});
 }
 export default {fetch:handle};
-export {PUBLIC_PROVIDER_POLICIES,canonicalCacheRequest,decodePublicImageTicket,handle,handlePublicImage,hostnameAllowed,licensedKey,readBoundedBody,validPublicImageSignature,validSignature,validatePublicTarget};
+export {PUBLIC_PROVIDER_POLICIES,canonicalCacheRequest,decodePublicImageTicket,handle,handlePublicImage,hostnameAllowed,licensedKey,mangaDotNetOriginAuth,mangaDotNetOriginUrl,readBoundedBody,validPublicImageSignature,validSignature,validatePublicTarget};

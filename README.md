@@ -2,7 +2,7 @@
 
 This repository is the **standalone Cloudflare Worker pilot** for NEXORA V1. It was copied from the tested, isolated stage-one branch of `akidwush/all-tools-nexora`. There are no build scripts or deploy hooks for the NEXORA V1 Vercel production project.
 
-**Scope today:** the original Worker-created SVG fixture, health endpoint, **Cloudflare Static Assets for a repository-owned comic-style test image**, the existing disabled-by-default licensed-public-image R2 handler, and an **enabled signed public-provider image proxy**. The provider proxy accepts only five fixed public sources and their source-specific host allowlists. It has no VVIP membership implementation, rejects ManhwaDesu and all experimental sources, is not an arbitrary URL proxy, and does not require R2. NEXORA V1 sends eligible public pages here first and retains the same-origin Vercel route only as a one-attempt fallback.
+**Scope today:** the original Worker-created SVG fixture, health endpoint, **Cloudflare Static Assets for a repository-owned comic-style test image**, the existing disabled-by-default licensed-public-image R2 handler, and an **enabled signed public-provider image proxy**. The provider proxy accepts only five fixed public sources and their source-specific host allowlists. It has no VVIP membership implementation, rejects ManhwaDesu and all experimental sources, is not an arbitrary URL proxy, and does not require R2. NEXORA V1 sends eligible public pages here first and retains the same-origin Vercel route only as a one-attempt fallback. MangaDotNet is the one special case: a Cloudflare cache MISS uses a dual-HMAC Vercel origin shield because MangaDotNet rejects direct Worker egress; cache HIT delivery remains entirely on Cloudflare.
 
 ## Connect the GitHub repository in Cloudflare
 
@@ -15,7 +15,7 @@ Use your own browser at https://dash.cloudflare.com/ → **Workers & Pages → C
 - Build command: `npm install --no-audit --no-fund && npm run check && npm test`
 - Deploy command: `npx wrangler deploy`
 - Preview command: leave empty, or use the dashboard default. Do not enable previews for unrelated branches.
-- Root directory: leave at repository root if shown. **No R2 bindings or environment secrets are required.**
+- Root directory: leave at repository root if shown. **No R2 binding is required.** The public proxy still requires the existing private `COMIC_GATEWAY_SIGNING_SECRET`.
 
 Review the settings and click **Save and Deploy** only for this new Worker. The GitHub test workflow is intentionally test-only and cannot deploy.
 
@@ -52,13 +52,15 @@ The Worker verifies the signature before parsing the payload for routing or cons
 
 Provider `Referer` and `Origin` headers are fixed by Worker policy; browser-supplied values and ticket-supplied headers are ignored. Safe logs contain only source, status, cache result, byte size, and latency.
 
+MangaDotNet never goes directly from Worker to provider. On a canonical cache MISS, the Worker calls `NEXORA_V1_ORIGIN_URL` at the existing `/api/comics` function with the original signed ticket plus a domain-separated second HMAC in internal headers. Vercel verifies both HMACs, the five-minute expiry, exact `mangadotnet` source, and the fixed MangaDotNet hostname policy before fetching. Ticket material stays out of the Vercel URL. The Vercel response is `private, no-store`; only the validated Worker response enters Cloudflare Cache API. A cache HIT therefore consumes neither a Vercel Function Invocation nor Vercel Fast Origin Transfer.
+
 After validation, `caches.default` uses `sha256(source + "\\n" + normalizedUrl + "\\n" + fixedPolicyId)` as a POP-local cache identity. Signature, expiry, and user identity are excluded. Valid public page images use a one-hour shared-cache TTL and a shorter five-minute browser TTL. Errors, redirects, unknown/VVIP sources, and responses carrying `Set-Cookie` are never cached. Cloudflare Cache API storage is local to a POP/data center; a miss in one POP does not imply a global miss.
 
 Committed configuration sets the non-secret `ENABLE_PROVIDER_IMAGE_PROXY=true` so eligible public images use Cloudflare as the primary delivery path. Configure the same private 32+ random-byte `COMIC_GATEWAY_SIGNING_SECRET` used by NEXORA only in Cloudflare; never commit it or add it as a plain-text Wrangler variable. The endpoint still fails closed when that secret is absent or invalid. For an emergency kill switch, set `ENABLE_PROVIDER_IMAGE_PROXY=false` in Cloudflare and redeploy; NEXORA V1 keeps a single same-origin Vercel fallback attempt.
 
 ## Production rollout
 
-Merge and deploy the gateway change before evaluating savings. Confirm `/health` reports `publicImageProxyEnabled:true`; NEXORA V1 already emits Cloudflare URLs first for MangaDex, Shinigami, Voratoon, and Ainzscans. MangaDotNet stays on the Vercel legacy route until its verified Cloudflare upstream 403 is resolved. ManhwaDesu, DoujinDesu, and ManhwaLand remain excluded; the VVIP path never enters this public cache.
+Merge the coordinated NEXORA V1 origin-shield PR first, then merge and manually deploy this gateway PR. Confirm `/health` reports `publicImageProxyEnabled:true`; NEXORA V1 emits Cloudflare URLs first for MangaDex, Shinigami, Voratoon, Ainzscans, and MangaDotNet. Confirm a MangaDotNet request reports `X-Nexora-Cache: MISS` once and `HIT` on repetition. ManhwaDesu, DoujinDesu, and ManhwaLand remain excluded; the VVIP path never enters this public cache.
 
 Do not enable `ENABLE_IMAGE_DELIVERY`: that separate R2 path remains disabled and is unrelated to provider proxy delivery. A failed Cloudflare image gets one same-origin Vercel fallback attempt, preventing reader breakage while keeping the normal path off Vercel Functions and Fast Origin Transfer.
 

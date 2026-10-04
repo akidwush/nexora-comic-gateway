@@ -24,7 +24,7 @@ function fakeCache(){
   const rows=new Map();let puts=0;
   return {get puts(){return puts;},async match(request){return rows.get(request.url)?.clone()||null;},async put(request,response){puts++;rows.set(request.url,response.clone());}};
 }
-function enabled(){return {ENABLE_PROVIDER_IMAGE_PROXY:"true",COMIC_GATEWAY_SIGNING_SECRET:TEST_SECRET};}
+function enabled(){return {ENABLE_PROVIDER_IMAGE_PROXY:"true",COMIC_GATEWAY_SIGNING_SECRET:TEST_SECRET,NEXORA_V1_ORIGIN_URL:"https://all-tools-nexora-teal.vercel.app"};}
 async function invoke(url,{method="GET",fetchImpl=async()=>imageResponse(),cache=fakeCache(),headers={},logs=[]}={}){
   const response=await handle(new Request(url,{method,headers}),enabled(),{}, {fetchImpl,cache,now:()=>NOW_MS,log:value=>logs.push(value)});
   return {response,cache,logs};
@@ -113,7 +113,6 @@ test("provider headers are fixed server-side and browser overrides are ignored",
   const cases=[
     ["shinigami","https://cdn.shngm.io/chapter/a.webp","https://app.shinigami.asia/","https://app.shinigami.asia",undefined,undefined],
     ["voratoon","https://cdn.voratoon.com/a.webp","https://v5.voratoon.com/","https://v5.voratoon.com",undefined,undefined],
-    ["mangadotnet","https://cdn.mangadot.net/a.webp","https://mangadot.net/","https://mangadot.net","image/avif,image/webp,image/jpeg,image/*","All-Tools-Nexora-Comic-Reader/1.0 (+https://all-tools-nexora.vercel.app)"],
     ["mangadex","https://uploads.mangadex.org/a.webp",undefined,undefined,undefined,undefined],
     ["ainzscans","https://yuucdn.com/a.webp",undefined,undefined,undefined,undefined]
   ];
@@ -121,8 +120,33 @@ test("provider headers are fixed server-side and browser overrides are ignored",
     const {response}=await invoke(await signedUrl(source,target),{fetchImpl,headers:{Referer:"https://evil.example/",Origin:"https://evil.example"}});
     assert.equal(response.status,200);
     const options=seen.at(-1);assert.equal(options.headers.Referer,referer);assert.equal(options.headers.Origin,origin);assert.equal(options.redirect,"manual");
-    if(source==="mangadotnet"){assert.equal(options.headers.Accept,accept);assert.equal(options.headers["User-Agent"],userAgent);}
   }
+});
+
+test("MangaDotNet uses signed Vercel origin only on cache MISS",async()=>{
+  const cache=fakeCache();let calls=0;let seenUrl;let seenOptions;
+  const firstUrl=await signedUrl("mangadotnet","https://cdn.mangadot.net/pages/a.webp");
+  const first=await invoke(firstUrl,{cache,fetchImpl:async(url,options)=>{calls++;seenUrl=new URL(url);seenOptions=options;return imageResponse();}});
+  assert.equal(first.response.status,200);assert.equal(first.response.headers.get("x-nexora-cache"),"MISS");assert.equal(calls,1);
+  assert.equal(seenUrl.origin,"https://all-tools-nexora-teal.vercel.app");assert.equal(seenUrl.pathname,"/api/comics");assert.equal(seenUrl.searchParams.get("action"),"mangadotnet-origin");
+  assert.equal(seenUrl.searchParams.has("ticket"),false);assert.equal(seenUrl.searchParams.has("sig"),false,"signed data must stay out of Vercel access-log URLs");
+  assert.notEqual(seenUrl.toString(),"https://cdn.mangadot.net/pages/a.webp");
+  assert.match(seenOptions.headers["X-Nexora-Origin-Auth"],/^[A-Za-z0-9_-]{43}$/);assert.ok(seenOptions.headers["X-Nexora-Origin-Ticket"]);assert.match(seenOptions.headers["X-Nexora-Origin-Signature"],/^[A-Za-z0-9_-]{43}$/);assert.equal(seenOptions.method,"GET");
+  const second=await invoke(await signedUrl("mangadotnet","https://cdn.mangadot.net/pages/a.webp",{exp:NOW+120}),{cache,fetchImpl:async()=>{calls++;return imageResponse();}});
+  assert.equal(second.response.status,200);assert.equal(second.response.headers.get("x-nexora-cache"),"HIT");assert.equal(calls,1,"Vercel origin must not run on cache HIT");
+});
+
+test("MangaDotNet origin shield fails closed when origin config is missing",async()=>{
+  let calls=0;
+  const url=await signedUrl("mangadotnet","https://cdn.mangadot.net/a.webp");
+  const response=await handle(new Request(url),{ENABLE_PROVIDER_IMAGE_PROXY:"true",COMIC_GATEWAY_SIGNING_SECRET:TEST_SECRET},{},{fetchImpl:async()=>{calls++;return imageResponse();},cache:fakeCache(),now:()=>NOW_MS});
+  assert.equal(response.status,503);assert.deepEqual(await response.json(),{ok:false,error:"ORIGIN_SHIELD_UNAVAILABLE"});assert.equal(calls,0);
+});
+
+test("MangaDotNet HEAD cache MISS does not invoke Vercel",async()=>{
+  let calls=0;const url=await signedUrl("mangadotnet","https://cdn.mangadot.net/a.webp");
+  const {response}=await invoke(url,{method:"HEAD",fetchImpl:async()=>{calls++;return imageResponse();}});
+  assert.equal(response.status,404);assert.equal(calls,0);
 });
 
 test("failed responses and Set-Cookie responses never enter Cache API",async()=>{
