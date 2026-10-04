@@ -1,8 +1,8 @@
-# NEXORA Comic Gateway — Cloudflare Stage 2 + disabled-by-default Stage 3
+# NEXORA Comic Gateway — Cloudflare Stage 2 + active signed Stage 3
 
 This repository is the **standalone Cloudflare Worker pilot** for NEXORA V1. It was copied from the tested, isolated stage-one branch of `akidwush/all-tools-nexora`. There are no build scripts or deploy hooks for the NEXORA V1 Vercel production project.
 
-**Scope today:** the original Worker-created SVG fixture, health endpoint, **Cloudflare Static Assets for a repository-owned comic-style test image**, the existing disabled-by-default licensed-public-image R2 handler, and a separate **disabled-by-default signed public-provider image proxy**. The provider proxy accepts only five fixed public sources and their source-specific host allowlists. It has no VVIP membership implementation, rejects ManhwaDesu and all experimental sources, is not an arbitrary URL proxy, and does not require R2.
+**Scope today:** the original Worker-created SVG fixture, health endpoint, **Cloudflare Static Assets for a repository-owned comic-style test image**, the existing disabled-by-default licensed-public-image R2 handler, and an **enabled signed public-provider image proxy**. The provider proxy accepts only five fixed public sources and their source-specific host allowlists. It has no VVIP membership implementation, rejects ManhwaDesu and all experimental sources, is not an arbitrary URL proxy, and does not require R2. NEXORA V1 sends eligible public pages here first and retains the same-origin Vercel route only as a one-attempt fallback.
 
 ## Connect the GitHub repository in Cloudflare
 
@@ -19,7 +19,7 @@ Use your own browser at https://dash.cloudflare.com/ → **Workers & Pages → C
 
 Review the settings and click **Save and Deploy** only for this new Worker. The GitHub test workflow is intentionally test-only and cannot deploy.
 
-Once deployed after review, check `https://<YOUR-SUBDOMAIN>.workers.dev/health` (expect `ok:true`, `stage:3`, `imageDeliveryEnabled:false`, `publicImageProxyEnabled:false`, `vvip:false` while committed defaults remain active) and `https://<YOUR-SUBDOMAIN>.workers.dev/fixture/image.svg`. Never share Cloudflare account credentials, tokens, cookies, or secrets.
+Once deployed after review with `COMIC_GATEWAY_SIGNING_SECRET` configured privately, check `https://<YOUR-SUBDOMAIN>.workers.dev/health` (expect `ok:true`, `stage:3`, `imageDeliveryEnabled:false`, `publicImageProxyEnabled:true`, `vvip:false`) and `https://<YOUR-SUBDOMAIN>.workers.dev/fixture/image.svg`. If the secret is absent or invalid, the public proxy remains fail-closed even though the committed non-secret flag is enabled. Never share Cloudflare account credentials, tokens, cookies, or secrets.
 
 Official docs: https://developers.cloudflare.com/workers/ci-cd/builds/ and https://developers.cloudflare.com/workers/ci-cd/builds/configuration/.
 
@@ -54,7 +54,13 @@ Provider `Referer` and `Origin` headers are fixed by Worker policy; browser-supp
 
 After validation, `caches.default` uses `sha256(source + "\\n" + normalizedUrl + "\\n" + fixedPolicyId)` as a POP-local cache identity. Signature, expiry, and user identity are excluded. Valid public page images use a one-hour shared-cache TTL and a shorter five-minute browser TTL. Errors, redirects, unknown/VVIP sources, and responses carrying `Set-Cookie` are never cached. Cloudflare Cache API storage is local to a POP/data center; a miss in one POP does not imply a global miss.
 
-Committed configuration keeps `ENABLE_PROVIDER_IMAGE_PROXY=false`. For a manual pilot only, configure the same private 32+ random-byte `COMIC_GATEWAY_SIGNING_SECRET` used by NEXORA and then set `ENABLE_PROVIDER_IMAGE_PROXY=true` in Cloudflare. Do not commit the secret, enable the flag from this repository, or add it as a plain-text Wrangler variable.
+Committed configuration sets the non-secret `ENABLE_PROVIDER_IMAGE_PROXY=true` so eligible public images use Cloudflare as the primary delivery path. Configure the same private 32+ random-byte `COMIC_GATEWAY_SIGNING_SECRET` used by NEXORA only in Cloudflare; never commit it or add it as a plain-text Wrangler variable. The endpoint still fails closed when that secret is absent or invalid. For an emergency kill switch, set `ENABLE_PROVIDER_IMAGE_PROXY=false` in Cloudflare and redeploy; NEXORA V1 keeps a single same-origin Vercel fallback attempt.
+
+## Production rollout
+
+Merge and deploy the gateway change before evaluating savings. Confirm `/health` reports `publicImageProxyEnabled:true`; NEXORA V1 already emits Cloudflare URLs first for MangaDex, Shinigami, Voratoon, and Ainzscans. MangaDotNet stays on the Vercel legacy route until its verified Cloudflare upstream 403 is resolved. ManhwaDesu, DoujinDesu, and ManhwaLand remain excluded; the VVIP path never enters this public cache.
+
+Do not enable `ENABLE_IMAGE_DELIVERY`: that separate R2 path remains disabled and is unrelated to provider proxy delivery. A failed Cloudflare image gets one same-origin Vercel fallback attempt, preventing reader breakage while keeping the normal path off Vercel Functions and Fast Origin Transfer.
 
 ## API surface
 
@@ -64,12 +70,12 @@ Committed configuration keeps `ENABLE_PROVIDER_IMAGE_PROXY=false`. For a manual 
 | `GET /fixture/image.svg` | Locally generated test SVG; no third-party requests |
 | `GET /pilot/comic-page-v1.svg` | Public versioned static image fixture; Cloudflare serves assets-first |
 | `GET /v1/image?key=...&exp=...&sig=...` | Returns 503 `PILOT_DISABLED` at this stage |
-| `GET /v1/public-image?ticket=...&sig=...` | Signed public provider proxy; returns 503 until the Stage 3 flag and secret are configured |
+| `GET /v1/public-image?ticket=...&sig=...` | Primary signed public-provider proxy; requires the Cloudflare signing secret and rejects invalid/expired tickets |
 | Other paths | 404 |
 
 ## Rules for future work
 
-Only images **owned by NEXORA or expressly licensed for commercial redistribution** can enter an optional R2 bucket under `public/`. External comic providers must be assessed separately for API and distribution permissions. Keep the Stage 3 flag disabled until that review and the paired NEXORA rollout are approved.
+Only images **owned by NEXORA or expressly licensed for commercial redistribution** can enter an optional R2 bucket under `public/`. External comic providers must be assessed separately for API and distribution permissions. The Stage 3 public-provider rollout is approved and declaratively enabled. Keep the source/host allowlists narrow, retain the signed-ticket gate, and use the explicit false kill switch if provider behavior or legal review changes.
 
 Even if licensed content is stored in R2, never mix VVIP material into this public-image gateway. An independent fail-closed membership gate and security review are required before any VVIP image delivery is migrated. Short-lived signed URLs are not a full replacement for membership checks.
 
