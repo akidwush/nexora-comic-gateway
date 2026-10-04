@@ -26,7 +26,7 @@ jobs:
       - name: Smoke-test local Static Assets delivery (no Cloudflare account)
         run: |
           set -eu
-          npx wrangler dev --local --ip 127.0.0.1 --port 8791 >/tmp/nexora-stage3-dev.log 2>&1 &
+          npx wrangler dev --local --ip 127.0.0.1 --port 8791 --var COMIC_GATEWAY_SIGNING_SECRET:test-only-stage3-signing-secret-32-bytes-minimum >/tmp/nexora-stage3-dev.log 2>&1 &
           PID=$!
           trap 'kill "$PID" 2>/dev/null || true' EXIT
           READY=0
@@ -36,11 +36,11 @@ jobs:
           done
           if [ "$READY" != 1 ]; then cat /tmp/nexora-stage3-dev.log; exit 1; fi
           grep -q '"stage":3' /tmp/nexora-health.json
-          grep -q '"publicImageProxyEnabled":false' /tmp/nexora-health.json
+          grep -q '"publicImageProxyEnabled":true' /tmp/nexora-health.json
           curl --fail --silent --show-error -D /tmp/nexora-asset-headers.txt http://127.0.0.1:8791/pilot/comic-page-v1.svg -o /tmp/nexora-asset.svg
           grep -q 'NEXORA' /tmp/nexora-asset.svg
           grep -qi 'content-type:.*image/svg+xml' /tmp/nexora-asset-headers.txt
           grep -qi 'cache-control:.*immutable' /tmp/nexora-asset-headers.txt
           test "$(curl --silent -o /dev/null -w '%{http_code}' 'http://127.0.0.1:8791/v1/image')" = "503"
-          test "$(curl --silent -o /dev/null -w '%{http_code}' 'http://127.0.0.1:8791/v1/public-image')" = "503"
-          echo "Stage 3: static fixture served, dynamic health verified, gated routes disabled."
+          test "$(curl --silent -o /dev/null -w '%{http_code}' 'http://127.0.0.1:8791/v1/public-image')" = "400"
+          echo "Stage 3: static fixture served, signed public proxy enabled, R2/VVIP route disabled."
