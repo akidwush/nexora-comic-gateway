@@ -1,7 +1,8 @@
 // NEXORA V1 Comic Gateway.
-// Stage 2 static/R2 behavior remains isolated from the Stage 3 public provider proxy.
+// Stage 2 static/R2 behavior remains isolated from the Stage 3 provider proxy.
 const MAX_IMAGE_BYTES = 8_000_000;
 const MAX_SIGNATURE_LIFETIME_SECONDS = 300;
+const PRIVATE_SIGNATURE_LIFETIME_SECONDS = 90;
 const PUBLIC_IMAGE_EDGE_TTL_SECONDS = 3_600;
 const PUBLIC_IMAGE_BROWSER_TTL_SECONDS = 300;
 const MANGADOTNET_ORIGIN_AUTH_HEADER = "X-Nexora-Origin-Auth";
@@ -16,6 +17,9 @@ const PUBLIC_PROVIDER_POLICIES = Object.freeze({
   voratoon: Object.freeze({id:"voratoon-v1",hosts:[".voratoon.com"],headers:Object.freeze({Referer:"https://v5.voratoon.com/",Origin:"https://v5.voratoon.com"})}),
   ainzscans: Object.freeze({id:"ainzscans-v1",hosts:[".ainzscans01.com","yuucdn.com","kacu.gmbr.pro"],headers:Object.freeze({})}),
   mangadotnet: Object.freeze({id:"mangadotnet-v1",hosts:["mangadot.net"],headers:Object.freeze({Accept:"image/avif,image/webp,image/jpeg,image/*","User-Agent":"All-Tools-Nexora-Comic-Reader/1.0 (+https://all-tools-nexora.vercel.app)",Referer:"https://mangadot.net/",Origin:"https://mangadot.net"})})
+});
+const PRIVATE_PROVIDER_POLICIES = Object.freeze({
+  manhwadesu: Object.freeze({id:"manhwadesu-vvip-v1",hosts:[".gilakomik.id", ".manhwadesu.wiki"],headers:Object.freeze({})})
 });
 
 function responseJson(data,status=200,extras={}) {
@@ -107,16 +111,26 @@ function isIpLiteral(hostname) {
   const host=String(hostname||"").replace(/^\[|\]$/g,"");
   return /^(?:\d{1,3}\.){3}\d{1,3}$/.test(host)||host.includes(":");
 }
-function validatePublicTarget(source,value,policyId) {
-  if(EXCLUDED_SOURCES.has(source))return null;
-  const policy=PUBLIC_PROVIDER_POLICIES[source];
-  if(!policy||policy.id!==policyId||typeof value!=="string"||value.length>4000)return null;
+function validateTargetAgainstPolicy(value,policy) {
+  if(!policy||typeof value!=="string"||value.length>4000)return null;
   try {
     const target=new URL(value);
     if(target.protocol!=="https:"||target.username||target.password||target.port||target.hash||isIpLiteral(target.hostname))return null;
     if(!hostnameAllowed(target.hostname,policy.hosts))return null;
     return {target,policy};
   } catch {return null;}
+}
+function validatePublicTarget(source,value,policyId) {
+  if(EXCLUDED_SOURCES.has(source))return null;
+  const policy=PUBLIC_PROVIDER_POLICIES[source];
+  if(!policy||policy.id!==policyId)return null;
+  return validateTargetAgainstPolicy(value,policy);
+}
+function validatePrivateTarget(source,value,policyId,payload={}) {
+  const policy=PRIVATE_PROVIDER_POLICIES[source];
+  if(!policy||policy.id!==policyId)return null;
+  if(payload.scope!=="vvip"||payload.private!==true||!/^[A-Za-z0-9_-]{20,32}$/.test(String(payload.sub||"")))return null;
+  return validateTargetAgainstPolicy(value,policy);
 }
 async function canonicalCacheRequest(source,target,policyId,origin="https://cache.nexora.invalid") {
   const bytes=new TextEncoder().encode(source+"\n"+target.toString()+"\n"+policyId);
@@ -132,6 +146,21 @@ function publicImageHeaders(contentType,size,cacheStatus) {
     "X-Robots-Tag":"noindex",
     "Cross-Origin-Resource-Policy":"cross-origin",
     "X-Nexora-Cache":cacheStatus
+  };
+  if(Number.isSafeInteger(size)&&size>=0)headers["Content-Length"]=String(size);
+  return headers;
+}
+function privateImageHeaders(contentType,size) {
+  const headers={
+    "Content-Type":contentType,
+    "Cache-Control":"private, no-store, max-age=0",
+    "CDN-Cache-Control":"no-store",
+    "Vercel-CDN-Cache-Control":"no-store",
+    "Pragma":"no-cache",
+    "X-Content-Type-Options":"nosniff",
+    "X-Robots-Tag":"noindex",
+    "Cross-Origin-Resource-Policy":"cross-origin",
+    "X-Nexora-Cache":"PRIVATE"
   };
   if(Number.isSafeInteger(size)&&size>=0)headers["Content-Length"]=String(size);
   return headers;
@@ -163,7 +192,8 @@ async function readBoundedBody(response,maximumBytes=MAX_IMAGE_BYTES) {
 }
 function safeLog(log,source,status,cache,bytes,started,errorCode,upstreamStatus) {
   const normalizedUpstreamStatus=Number(upstreamStatus);
-  const row={event:"public-image",source:PUBLIC_PROVIDER_POLICIES[source]?source:"unknown",status:Number(status)||500,cache:cache||"BYPASS",bytes:Math.max(0,Number(bytes)||0),latencyMs:Math.max(0,Date.now()-started),errorCode:typeof errorCode==="string"?errorCode:null,upstreamStatus:Number.isInteger(normalizedUpstreamStatus)&&normalizedUpstreamStatus>=100&&normalizedUpstreamStatus<=599?normalizedUpstreamStatus:null};
+  const knownSource=Boolean(PUBLIC_PROVIDER_POLICIES[source]||PRIVATE_PROVIDER_POLICIES[source]);
+  const row={event:"public-image",source:knownSource?source:"unknown",status:Number(status)||500,cache:cache||"BYPASS",bytes:Math.max(0,Number(bytes)||0),latencyMs:Math.max(0,Date.now()-started),errorCode:typeof errorCode==="string"?errorCode:null,upstreamStatus:Number.isInteger(normalizedUpstreamStatus)&&normalizedUpstreamStatus>=100&&normalizedUpstreamStatus<=599?normalizedUpstreamStatus:null};
   try {log(JSON.stringify(row));} catch {}
 }
 async function handlePublicImage(request,env,context={},dependencies={}) {
@@ -177,7 +207,6 @@ async function handlePublicImage(request,env,context={},dependencies={}) {
     const ticket=requestUrl.searchParams.get("ticket");
     const sig=requestUrl.searchParams.get("sig");
     if(!ticket||!sig||!base64UrlToBytes(sig,32)){errorCode="INVALID_IMAGE_REQUEST";return response=responseJson({ok:false,error:"INVALID_IMAGE_REQUEST"},400);}
-    // Verify the exact encoded payload before parsing or using any of its fields.
     if(!(await validPublicImageSignature(env.COMIC_GATEWAY_SIGNING_SECRET,ticket,sig))){errorCode="SIGNATURE_INVALID";return response=responseJson({ok:false,error:"SIGNATURE_INVALID"},403);}
     const payload=decodePublicImageTicket(ticket);
     if(!payload||payload.v!==1||typeof payload.src!=="string"||typeof payload.url!=="string"||typeof payload.policy!=="string"||!Number.isSafeInteger(payload.exp))
@@ -185,14 +214,24 @@ async function handlePublicImage(request,env,context={},dependencies={}) {
     source=payload.src;
     const now=Math.floor((typeof dependencies.now==="function"?dependencies.now():Date.now())/1000);
     if(payload.exp<=now){errorCode="SIGNED_URL_EXPIRED";return response=responseJson({ok:false,error:"SIGNED_URL_EXPIRED"},403);}
-    if(payload.exp>now+MAX_SIGNATURE_LIFETIME_SECONDS){errorCode="SIGNED_URL_TOO_LONG";return response=responseJson({ok:false,error:"SIGNED_URL_TOO_LONG"},403);}
-    if(EXCLUDED_SOURCES.has(source)){errorCode="SOURCE_NOT_ALLOWED";return response=responseJson({ok:false,error:"SOURCE_NOT_ALLOWED"},403);}
-    const validated=validatePublicTarget(source,payload.url,payload.policy);
-    if(!validated){errorCode="TARGET_NOT_ALLOWED";return response=responseJson({ok:false,error:"TARGET_NOT_ALLOWED"},403);}
 
-    const cache=dependencies.cache||globalThis.caches?.default;
-    if(cache)cacheStatus="MISS";
-    const cacheRequest=await canonicalCacheRequest(source,validated.target,validated.policy.id,requestUrl.origin);
+    const privateRequest=source==="manhwadesu";
+    if(privateRequest&&payload.exp>now+PRIVATE_SIGNATURE_LIFETIME_SECONDS){errorCode="SIGNED_URL_TOO_LONG";return response=responseJson({ok:false,error:"SIGNED_URL_TOO_LONG"},403);}
+    if(!privateRequest&&payload.exp>now+MAX_SIGNATURE_LIFETIME_SECONDS){errorCode="SIGNED_URL_TOO_LONG";return response=responseJson({ok:false,error:"SIGNED_URL_TOO_LONG"},403);}
+
+    let validated;
+    if(privateRequest){
+      validated=validatePrivateTarget(source,payload.url,payload.policy,payload);
+      if(!validated){errorCode="PRIVATE_TARGET_NOT_ALLOWED";return response=responseJson({ok:false,error:"PRIVATE_TARGET_NOT_ALLOWED"},403);}
+    }else{
+      if(EXCLUDED_SOURCES.has(source)){errorCode="SOURCE_NOT_ALLOWED";return response=responseJson({ok:false,error:"SOURCE_NOT_ALLOWED"},403);}
+      validated=validatePublicTarget(source,payload.url,payload.policy);
+      if(!validated){errorCode="TARGET_NOT_ALLOWED";return response=responseJson({ok:false,error:"TARGET_NOT_ALLOWED"},403);}
+    }
+
+    const cache=privateRequest?null:(dependencies.cache||globalThis.caches?.default);
+    if(privateRequest)cacheStatus="PRIVATE";else if(cache)cacheStatus="MISS";
+    const cacheRequest=privateRequest?null:await canonicalCacheRequest(source,validated.target,validated.policy.id,requestUrl.origin);
     if(cache&&typeof cache.match==="function"){
       try {
         const cached=await cache.match(cacheRequest);
@@ -240,7 +279,8 @@ async function handlePublicImage(request,env,context={},dependencies={}) {
     if(declaredLength&&(!/^\d+$/.test(declaredLength)||Number(declaredLength)>MAX_IMAGE_BYTES)){errorCode="IMAGE_SIZE_INVALID";upstreamStatus=upstream.status;return response=responseJson({ok:false,error:"IMAGE_SIZE_INVALID"},413);}
     if(request.method==="HEAD"){
       byteSize=declaredLength?Number(declaredLength):0;
-      response=new Response(null,{status:200,headers:publicImageHeaders(contentType,declaredLength?byteSize:null,"MISS")});
+      const headers=privateRequest?privateImageHeaders(contentType,declaredLength?byteSize:null):publicImageHeaders(contentType,declaredLength?byteSize:null,"MISS");
+      response=new Response(null,{status:200,headers});
       return response;
     }
     let body;
@@ -250,7 +290,7 @@ async function handlePublicImage(request,env,context={},dependencies={}) {
       return response=responseJson({ok:false,error:errorCode},Number(error?.status)||502);
     }
     byteSize=body.byteLength;
-    const headers=publicImageHeaders(contentType,byteSize,"MISS");
+    const headers=privateRequest?privateImageHeaders(contentType,byteSize):publicImageHeaders(contentType,byteSize,"MISS");
     response=new Response(body,{status:200,headers});
     const hasSetCookie=Boolean(upstream.headers.get("set-cookie"));
     if(cache&&!hasSetCookie&&typeof cache.put==="function"){
@@ -273,8 +313,9 @@ async function handle(request,env={},context={},dependencies={}) {
     return responseJson({ok:false,error:"METHOD_NOT_ALLOWED"},405,{"Allow":"GET, HEAD"});
   if(url.pathname==="/health") {
     const publicImageProxyEnabled=env.ENABLE_PROVIDER_IMAGE_PROXY==="true"&&secretIsValid(env.COMIC_GATEWAY_SIGNING_SECRET);
-    const body={ok:true,service:"nexora-comic-gateway-pilot",stage:3,staticAssetsEnabled:true,externalProviders:publicImageProxyEnabled,vvip:false,
-      imageDeliveryEnabled:env.ENABLE_IMAGE_DELIVERY==="true" && Boolean(env.IMAGE_BUCKET&&env.GATEWAY_HMAC_SECRET),publicImageProxyEnabled};
+    const privateVvipImageProxyEnabled=publicImageProxyEnabled;
+    const body={ok:true,service:"nexora-comic-gateway-pilot",stage:3,staticAssetsEnabled:true,externalProviders:publicImageProxyEnabled,vvip:privateVvipImageProxyEnabled,
+      imageDeliveryEnabled:env.ENABLE_IMAGE_DELIVERY==="true" && Boolean(env.IMAGE_BUCKET&&env.GATEWAY_HMAC_SECRET),publicImageProxyEnabled,privateVvipImageProxyEnabled};
     return method==="HEAD"?new Response(null,{status:200,headers:{"Cache-Control":"no-store"}}):responseJson(body);
   }
   if(url.pathname==="/fixture/image.svg") {
@@ -287,7 +328,6 @@ async function handle(request,env={},context={},dependencies={}) {
   if(url.pathname==="/v1/public-image")return handlePublicImage(request,env,context,dependencies);
   if(url.pathname!=="/v1/image")return responseJson({ok:false,error:"NOT_FOUND"},404);
   // Fail closed. R2 may contain only files NEXORA owns / has explicit redistribution rights for.
-  // This is PUBLIC licensed-content infrastructure only. Never put VVIP files in this bucket.
   if(env.ENABLE_IMAGE_DELIVERY!=="true")return responseJson({ok:false,error:"PILOT_DISABLED"},503);
   if(!env.IMAGE_BUCKET||typeof env.GATEWAY_HMAC_SECRET!=="string"||env.GATEWAY_HMAC_SECRET.length<32)
     return responseJson({ok:false,error:"CONFIGURATION_UNAVAILABLE"},503);
@@ -308,4 +348,4 @@ async function handle(request,env={},context={},dependencies={}) {
   return new Response(method==="HEAD"?null:object.body,{status:200,headers:imageHeaders(key,object.size)});
 }
 export default {fetch:handle};
-export {PUBLIC_PROVIDER_POLICIES,canonicalCacheRequest,decodePublicImageTicket,handle,handlePublicImage,hostnameAllowed,licensedKey,mangaDotNetOriginAuth,mangaDotNetOriginUrl,readBoundedBody,validPublicImageSignature,validSignature,validatePublicTarget};
+export {PRIVATE_PROVIDER_POLICIES,PUBLIC_PROVIDER_POLICIES,canonicalCacheRequest,decodePublicImageTicket,handle,handlePublicImage,hostnameAllowed,licensedKey,mangaDotNetOriginAuth,mangaDotNetOriginUrl,privateImageHeaders,readBoundedBody,validPublicImageSignature,validSignature,validatePrivateTarget,validatePublicTarget};
