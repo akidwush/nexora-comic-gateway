@@ -45,4 +45,5 @@ jobs:
           grep -qi 'cache-control:.*immutable' /tmp/nexora-asset-headers.txt
           test "$(curl --silent -o /dev/null -w '%{http_code}' 'http://127.0.0.1:8791/v1/image')" = "503"
           test "$(curl --silent -o /dev/null -w '%{http_code}' 'http://127.0.0.1:8791/v1/public-image')" = "400"
-          echo "Stage 3: public cache proxy + private no-store VVIP edge ready; R2 route remains disabled."
+          test "$(curl --silent -o /dev/null -w '%{http_code}' 'http://127.0.0.1:8791/v1/private-image')" = "400"
+          echo "Stage 3: isolated public cache proxy + private no-store VVIP edge ready; R2 route remains disabled."
