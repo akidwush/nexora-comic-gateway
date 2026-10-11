@@ -1,86 +1,176 @@
-# NEXORA Comic Gateway — Cloudflare Stage 2 + active signed Stage 3
+# NEXORA Comic Gateway — Cloudflare Stage 3
 
-This repository is the **standalone Cloudflare Worker pilot** for NEXORA V1. It was copied from the tested, isolated stage-one branch of `akidwush/all-tools-nexora`. There are no build scripts or deploy hooks for the NEXORA V1 Vercel production project.
+Standalone Cloudflare Worker for NEXORA V1 comic image delivery.
 
-**Scope today:** the original Worker-created SVG fixture, health endpoint, **Cloudflare Static Assets for a repository-owned comic-style test image**, the existing disabled-by-default licensed-public-image R2 handler, and an **enabled signed public-provider image proxy**. The provider proxy accepts only five fixed public sources and their source-specific host allowlists. It has no VVIP membership implementation, rejects ManhwaDesu and all experimental sources, is not an arbitrary URL proxy, and does not require R2. NEXORA V1 sends eligible public pages here first and retains the same-origin Vercel route only as a one-attempt fallback. MangaDotNet is the one special case: a Cloudflare cache MISS uses a dual-HMAC Vercel origin shield because MangaDotNet rejects direct Worker egress; cache HIT delivery remains entirely on Cloudflare.
+This repository does **not** deploy or modify the NEXORA V1 Vercel project. GitHub Actions run tests and Wrangler dry-runs only; production deployment remains an explicit Cloudflare action.
 
-## Connect the GitHub repository in Cloudflare
+## Current architecture
 
-Use your own browser at https://dash.cloudflare.com/ → **Workers & Pages → Create application → Import a repository**.
+The Worker has three deliberately separate image paths:
 
-- Git account: connect your own GitHub account; grant access to **only `akidwush/nexora-comic-gateway`** when prompted.
-- Repository: `akidwush/nexora-comic-gateway` (NOT `all-tools-nexora`).
-- Project name: `nexora-comic-gateway-pilot` (must match `wrangler.jsonc`).
-- Production branch: `main`. All Worker code is now in the repository root.
-- Build command: `npm install --no-audit --no-fund && npm run check && npm test`
-- Deploy command: `npx wrangler deploy`
-- Preview command: leave empty, or use the dashboard default. Do not enable previews for unrelated branches.
-- Root directory: leave at repository root if shown. **No R2 binding is required.** The public proxy still requires the existing private `COMIC_GATEWAY_SIGNING_SECRET`.
+1. **Public provider edge** — `/v1/public-image` receives short-lived HMAC tickets for MangaDex, Shinigami, Voratoon, Ainzscans, and MangaDotNet. Valid public images may use Cloudflare Cache API.
+2. **Private VVIP edge** — `/v1/private-image` receives a distinct opaque ManhwaDesu ticket only after NEXORA V1 has authenticated an active VVIP member. The ticket contains chapter/page coordinates, not the private upstream image URL. The Worker resolves the page against a fixed ManhwaDesu API, validates the resulting image host, and returns the bytes with `private, no-store` headers. VVIP bytes never enter Cloudflare Cache API.
+3. **Licensed R2 pilot** — `/v1/image` remains disabled by default. It is for NEXORA-owned or explicitly redistributable public files only and is not used for VVIP delivery.
 
-Review the settings and click **Save and Deploy** only for this new Worker. The GitHub test workflow is intentionally test-only and cannot deploy.
+ManhwaDesu remains rejected by the **public** provider endpoint.
 
-Once deployed after review with `COMIC_GATEWAY_SIGNING_SECRET` configured privately, check `https://<YOUR-SUBDOMAIN>.workers.dev/health` (expect `ok:true`, `stage:3`, `imageDeliveryEnabled:false`, `publicImageProxyEnabled:true`, `vvip:false`) and `https://<YOUR-SUBDOMAIN>.workers.dev/fixture/image.svg`. If the secret is absent or invalid, the public proxy remains fail-closed even though the committed non-secret flag is enabled. Never share Cloudflare account credentials, tokens, cookies, or secrets.
+## Security model
 
-Official docs: https://developers.cloudflare.com/workers/ci-cd/builds/ and https://developers.cloudflare.com/workers/ci-cd/builds/configuration/.
+### Public provider tickets
 
-## Local checks and deployment safety
+Public tickets use HMAC-SHA256 over the complete base64url-encoded JSON payload:
+
+```text
+{ v, src, url, exp, policy }
+```
+
+The Worker re-derives the provider policy from `src`, validates HTTPS, rejects userinfo/IP/custom-port/suffix-confusion targets, disables upstream redirects, validates image MIME, and bounds image bodies to 8,000,000 bytes. Public tickets expire in at most 300 seconds.
+
+The public allowlist is fixed to:
+
+- MangaDex: `.mangadex.network`, `.mangadex.org`
+- Shinigami: `.shngm.io`, `.shngm.id`, `.shinigami.asia`
+- Voratoon: `.voratoon.com`
+- Ainzscans: `.ainzscans01.com`, `yuucdn.com`, `kacu.gmbr.pro`
+- MangaDotNet: `mangadot.net`
+
+MangaDotNet remains the special case: on a canonical Cloudflare cache MISS the Worker uses the signed Vercel origin shield because MangaDotNet can reject direct Worker egress. Cache HIT delivery remains on Cloudflare.
+
+### Private ManhwaDesu VVIP tickets
+
+NEXORA V1 performs the account/VVIP check **before** issuing a private image ticket. The Worker does not independently query the NEXORA membership database.
+
+A private ticket contains only opaque resource context:
+
+```text
+{
+  v: 1,
+  src: "manhwadesu",
+  rid: "<chapter id>",
+  idx: 0,
+  exp,
+  policy: "manhwadesu-vvip-v1",
+  scope: "vvip",
+  private: true,
+  sub: "<non-reversible user subject hash>"
+}
+```
+
+It intentionally contains **no `url` field**. The browser therefore cannot decode the ticket to recover the private provider image URL.
+
+For every valid `/v1/private-image` request the Worker:
+
+1. validates the HMAC and all private claims;
+2. enforces a maximum lifetime of **90 seconds**;
+3. resolves the chapter only through the fixed `https://api-md.gilakomik.id/api/manga/chapter/<rid>` API;
+4. selects only the signed `idx` page;
+5. validates the resolved image target against `.gilakomik.id` / `.manhwadesu.wiki`;
+6. fetches with redirects disabled and the same image size/MIME guards used by the public edge;
+7. returns `Cache-Control: private, no-store`, `CDN-Cache-Control: no-store`, and `X-Nexora-Cache: PRIVATE`.
+
+Private tickets also require the fixed `manhwadesu-vvip-v1` policy, `scope=vvip`, `private=true`, and a valid hashed subject claim. Raw NEXORA user IDs are never sent to the Worker.
+
+This removes normal ManhwaDesu image bytes from Vercel Fast Origin Transfer without exposing direct private image URLs in the client ticket. A short-lived signed ticket is not treated as a replacement for VVIP authorization; authorization happens in NEXORA V1 before issuance.
+
+DoujinDesu and ManhwaLand remain excluded from this private path.
+
+## Cache behavior
+
+For public providers, `caches.default` uses a canonical hash of:
+
+```text
+source + "\n" + normalizedUrl + "\n" + fixedPolicyId
+```
+
+Signature, expiry, and user identity do not enter the public cache identity. Valid public images use a one-hour edge TTL and a five-minute browser TTL. Failed responses, redirects, invalid targets, and upstream responses carrying `Set-Cookie` are not cached.
+
+Private VVIP images never call Cache API and are always no-store.
+
+## Health endpoint
+
+With `ENABLE_PROVIDER_IMAGE_PROXY=true` and a valid `COMIC_GATEWAY_SIGNING_SECRET`, `/health` reports:
+
+```json
+{
+  "stage": 3,
+  "publicImageProxyEnabled": true,
+  "privateVvipImageProxyEnabled": true,
+  "vvip": true,
+  "imageDeliveryEnabled": false
+}
+```
+
+`vvip:true` means the **private no-store proxy contract is available**. It does not mean VVIP content is stored in R2 or publicly cached.
+
+## Required secret
+
+Both NEXORA V1 and this Worker must use the same private 32+ byte `COMIC_GATEWAY_SIGNING_SECRET`.
+
+Never commit that value to GitHub, Wrangler vars, documentation, issues, screenshots, or chat. Configure it only as a Cloudflare Worker secret and as the corresponding private NEXORA environment secret.
+
+The non-secret `ENABLE_PROVIDER_IMAGE_PROXY=true` flag is committed in `wrangler.jsonc`. If the signing secret is missing or invalid, both provider endpoints fail closed.
+
+## Safe deployment order for the VVIP migration
+
+The private VVIP contract changes both repositories, so rollout order matters:
+
+1. Merge the gateway PR after CI succeeds.
+2. Manually deploy the updated `nexora-comic-gateway` Worker.
+3. Verify `/health` reports `privateVvipImageProxyEnabled:true`.
+4. Only then merge/deploy the coordinated NEXORA V1 PR that starts issuing `/v1/private-image` tickets.
+5. Test one VVIP chapter and confirm normal page delivery returns `X-Nexora-Cache: PRIVATE` from the Worker rather than binary bytes from Vercel.
+
+Do **not** reverse steps 2 and 4; an older Worker intentionally does not implement `/v1/private-image`.
+
+## Local validation
 
 ```sh
-npm install
+npm install --no-audit --no-fund
 npm run check
 npm test
 npx wrangler deploy --dry-run
 ```
 
-GitHub Actions repeats the syntax, security-unit-test and Wrangler dry-run steps. It **never** deploys. The Worker is initially safe to deploy as a synthetic-fixture demonstration; it does not receive NEXORA production reader traffic.
+GitHub Actions performs syntax checks, security unit tests, a Wrangler dry-run, and local Worker smoke tests. The workflow does not deploy production.
 
-## Stage 2 — free static image without R2/payment
+## Cloudflare repository connection
 
-- A second synthetic portrait test image lives in `public/pilot/comic-page-v1.svg` and is served from `/pilot/comic-page-v1.svg` as a **static asset**, not as a Worker-generated response. It mimics the length/layout of a mobile comic page but contains no provider or copyrighted comic imagery.
-- `wrangler.jsonc` configures `assets.directory=./public`. Reserved `/health`, `/fixture/*`, and `/v1/*` paths **must** run the Worker first. The public `/pilot/*` path is served assets-first without invoking dynamic Worker code.
-- `public/_headers` sets an immutable **browser** cache for the versioned `comic-page-v1.svg`. Static assets also benefit from Cloudflare's internal edge caching. `_headers` does not affect Worker responses.
-- Add only original, commercially redistributable **public** files to `public/pilot/`. This is unsuitable for third-party comics with unclear distribution rights, VVIP, per-user images, or large, frequently updated libraries. For any changed file, use a new versioned filename.
-- **No billing details, R2 bucket, payment methods, secrets or provider credentials are required for Stage 2.**
-- After a **single** controlled merge/deployment, open `/health` (expect `stage:2` and `staticAssetsEnabled:true`) then `/pilot/comic-page-v1.svg` on your existing `workers.dev` address. Verify mobile display. Cloudflare's `CF-Cache-Status` is a hint, but may vary by edge and first request; do not infer actual bandwidth savings from it.
-- This stage demonstrates a free hosting path for *owned/authorized* public images only; NEXORA V1 production Comic Reader remains unchanged and no savings should yet be claimed.
+If connected through Cloudflare Builds:
 
-## Stage 3 — signed public provider images
+- repository: `akidwush/nexora-comic-gateway`
+- production branch: `main`
+- project name: `nexora-comic-gateway-pilot`
+- build command: `npm install --no-audit --no-fund && npm run check && npm test`
+- deploy command: `npx wrangler deploy`
+- root directory: repository root
 
-`GET` and `HEAD /v1/public-image` require an HMAC-SHA256 signature over the complete base64url-encoded JSON ticket. The payload is `{v, src, url, exp, policy}`; modifying the source, upstream URL, expiry, or policy invalidates the signature. Tickets expire in at most five minutes. Base64url is transport encoding, not secrecy.
+No R2 binding is required for either provider proxy.
 
-The Worker verifies the signature before parsing the payload for routing or consulting Cache API. It then re-derives the fixed provider policy from `src`, rejects private/experimental/unknown sources, validates HTTPS/no-userinfo/no-IP/no-custom-port and the exact hostname suffix allowlist, and fetches with redirects disabled. Only JPEG, PNG, WebP, and AVIF bodies up to 8,000,000 bytes are accepted. A bounded stream reader enforces the limit even if `Content-Length` is missing or incorrect.
+## Static Stage 2 fixture
 
-Provider `Referer` and `Origin` headers are fixed by Worker policy; browser-supplied values and ticket-supplied headers are ignored. Safe logs contain only source, status, cache result, byte size, and latency.
+`public/pilot/comic-page-v1.svg` is a synthetic repository-owned test asset retained only as a deployment/cache fixture. It contains no provider comic imagery.
 
-MangaDotNet never goes directly from Worker to provider. On a canonical cache MISS, the Worker calls `NEXORA_V1_ORIGIN_URL` at the existing `/api/comics` function with the original signed ticket plus a domain-separated second HMAC in internal headers. Vercel verifies both HMACs, the five-minute expiry, exact `mangadotnet` source, and the fixed MangaDotNet hostname policy before fetching. Ticket material stays out of the Vercel URL. The Vercel response is `private, no-store`; only the validated Worker response enters Cloudflare Cache API. A cache HIT therefore consumes neither a Vercel Function Invocation nor Vercel Fast Origin Transfer.
-
-After validation, `caches.default` uses `sha256(source + "\\n" + normalizedUrl + "\\n" + fixedPolicyId)` as a POP-local cache identity. Signature, expiry, and user identity are excluded. Valid public page images use a one-hour shared-cache TTL and a shorter five-minute browser TTL. Errors, redirects, unknown/VVIP sources, and responses carrying `Set-Cookie` are never cached. Cloudflare Cache API storage is local to a POP/data center; a miss in one POP does not imply a global miss.
-
-Committed configuration sets the non-secret `ENABLE_PROVIDER_IMAGE_PROXY=true` so eligible public images use Cloudflare as the primary delivery path. Configure the same private 32+ random-byte `COMIC_GATEWAY_SIGNING_SECRET` used by NEXORA only in Cloudflare; never commit it or add it as a plain-text Wrangler variable. The endpoint still fails closed when that secret is absent or invalid. For an emergency kill switch, set `ENABLE_PROVIDER_IMAGE_PROXY=false` in Cloudflare and redeploy; NEXORA V1 keeps a single same-origin Vercel fallback attempt.
-
-## Production rollout
-
-Merge the coordinated NEXORA V1 origin-shield PR first, then merge and manually deploy this gateway PR. Confirm `/health` reports `publicImageProxyEnabled:true`; NEXORA V1 emits Cloudflare URLs first for MangaDex, Shinigami, Voratoon, Ainzscans, and MangaDotNet. Confirm a MangaDotNet request reports `X-Nexora-Cache: MISS` once and `HIT` on repetition. ManhwaDesu, DoujinDesu, and ManhwaLand remain excluded; the VVIP path never enters this public cache.
-
-Do not enable `ENABLE_IMAGE_DELIVERY`: that separate R2 path remains disabled and is unrelated to provider proxy delivery. A failed Cloudflare image gets one same-origin Vercel fallback attempt, preventing reader breakage while keeping the normal path off Vercel Functions and Fast Origin Transfer.
+`ENABLE_IMAGE_DELIVERY` remains `false`; `/v1/image` is unrelated to provider/VVIP proxying.
 
 ## API surface
 
 | Path | Behavior |
 | --- | --- |
 | `GET /health` | Health/config snapshot without secrets |
-| `GET /fixture/image.svg` | Locally generated test SVG; no third-party requests |
-| `GET /pilot/comic-page-v1.svg` | Public versioned static image fixture; Cloudflare serves assets-first |
-| `GET /v1/image?key=...&exp=...&sig=...` | Returns 503 `PILOT_DISABLED` at this stage |
-| `GET /v1/public-image?ticket=...&sig=...` | Primary signed public-provider proxy; requires the Cloudflare signing secret and rejects invalid/expired tickets |
+| `GET /fixture/image.svg` | Worker-generated synthetic test image |
+| `GET /pilot/comic-page-v1.svg` | Versioned static test asset |
+| `GET /v1/public-image?ticket=...&sig=...` | Signed cached public-provider proxy; ManhwaDesu rejected |
+| `GET /v1/private-image?ticket=...&sig=...` | Opaque, 90-second, no-store ManhwaDesu VVIP edge; upstream image URL resolved server-side |
+| `GET /v1/image?key=...&exp=...&sig=...` | Licensed-public R2 path; disabled unless explicitly enabled |
 | Other paths | 404 |
 
 ## Rules for future work
 
-Only images **owned by NEXORA or expressly licensed for commercial redistribution** can enter an optional R2 bucket under `public/`. External comic providers must be assessed separately for API and distribution permissions. The Stage 3 public-provider rollout is approved and declaratively enabled. Keep the source/host allowlists narrow, retain the signed-ticket gate, and use the explicit false kill switch if provider behavior or legal review changes.
-
-Even if licensed content is stored in R2, never mix VVIP material into this public-image gateway. An independent fail-closed membership gate and security review are required before any VVIP image delivery is migrated. Short-lived signed URLs are not a full replacement for membership checks.
-
-If R2 licensed-public-image delivery is later approved, bind R2 as `IMAGE_BUCKET`, set a Cloudflare runtime secret `GATEWAY_HMAC_SECRET` (random 32+ chars **generated privately**), and have a trusted signer issue 5-minute `GET\n<key>\n<expiry>` HMAC-SHA256 signatures. Keep `ENABLE_IMAGE_DELIVERY=false` until all integration tests and permission checks pass. Do **not** share the secret with ChatGPT or put it in GitHub.
-
-The next migration step is measuring CDN/origin transfer for authorized *public* content. Avoid public caching of routes whose access changes with user membership.
+- Never make ManhwaDesu a normal public cached provider policy.
+- Never put VVIP images into public Cache API or the public R2 bucket.
+- Never place a private provider image URL in the client-visible VVIP ticket.
+- Keep provider/API hosts fixed and server-defined.
+- Keep public and private ticket TTLs bounded.
+- Keep VVIP authorization in NEXORA V1 before private ticket issuance.
+- Do not log tickets, signatures, raw user IDs, cookies, secrets, or resolved private URLs.
+- Do not deploy automatically from ChatGPT/GitHub Actions without explicit approval.
