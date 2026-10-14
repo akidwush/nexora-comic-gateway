@@ -1,4 +1,5 @@
 import { handle } from "./worker.mjs";
+import { handlePublicImageEdge } from "./public-edge.mjs";
 import { providerRequestHeaders } from "./provider-compat.mjs";
 
 const GATEWAY_REVISION = "cloudflare-only-v1";
@@ -21,9 +22,6 @@ function isMangaDotNetVercelOrigin(url) {
 function normalizeCompatHeaders(url, options = {}) {
   const headers = new Headers(options.headers || {});
   if (hostnameAllowed(url.hostname, SHINIGAMI_HOST_SUFFIXES)) {
-    // Current Shinigami clients fetch page images without the legacy app.shinigami.asia
-    // Referer/Origin pair. Keeping those stale headers can make the image CDN reject
-    // an otherwise valid page URL while metadata still returns 200.
     headers.delete("referer");
     headers.delete("origin");
     const compatible = providerRequestHeaders("shinigami");
@@ -35,9 +33,6 @@ function normalizeCompatHeaders(url, options = {}) {
 function createCompatFetch(baseFetch = globalThis.fetch) {
   return async function compatFetch(input, options = {}) {
     const url = new URL(String(input));
-
-    // Hard boundary: public MangaDotNet cache misses must not pull image bytes
-    // through the Vercel origin. Metadata/challenge handling remains fail-closed.
     if (isMangaDotNetVercelOrigin(url)) {
       return new Response(JSON.stringify({ ok: false, error: "VERCEL_IMAGE_ORIGIN_DISABLED" }), {
         status: 503,
@@ -47,21 +42,25 @@ function createCompatFetch(baseFetch = globalThis.fetch) {
         }
       });
     }
-
     if (typeof baseFetch !== "function") throw new TypeError("fetch unavailable");
     const headers = normalizeCompatHeaders(url, options);
     return baseFetch(input, { ...options, headers });
   };
 }
 
-async function fetchEntry(request, env = {}, context = {}) {
-  const response = await handle(request, env, context, {
-    fetchImpl: createCompatFetch(globalThis.fetch)
-  });
+function withRevision(response) {
   const headers = new Headers(response.headers);
   headers.set("X-Nexora-Gateway-Revision", GATEWAY_REVISION);
   return new Response(response.body, { status: response.status, statusText: response.statusText, headers });
 }
 
+async function fetchEntry(request, env = {}, context = {}) {
+  const url = new URL(request.url);
+  const response = url.pathname === "/v1/public-image"
+    ? await handlePublicImageEdge(request, env, context)
+    : await handle(request, env, context, { fetchImpl: createCompatFetch(globalThis.fetch) });
+  return withRevision(response);
+}
+
 export default { fetch: fetchEntry };
-export { GATEWAY_REVISION, SHINIGAMI_HOST_SUFFIXES, createCompatFetch, fetchEntry, hostnameAllowed, isMangaDotNetVercelOrigin, normalizeCompatHeaders };
+export { GATEWAY_REVISION, SHINIGAMI_HOST_SUFFIXES, createCompatFetch, fetchEntry, hostnameAllowed, isMangaDotNetVercelOrigin, normalizeCompatHeaders, withRevision };
