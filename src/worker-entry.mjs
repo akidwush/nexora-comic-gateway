@@ -1,6 +1,7 @@
 import { handle } from "./worker.mjs";
 import { providerRequestHeaders } from "./provider-compat.mjs";
 
+const GATEWAY_REVISION = "cloudflare-only-v1";
 const SHINIGAMI_HOST_SUFFIXES = Object.freeze([".shngm.io", ".shngm.id", ".shinigami.asia"]);
 
 function hostnameAllowed(hostname, suffixes) {
@@ -54,10 +55,13 @@ function createCompatFetch(baseFetch = globalThis.fetch) {
 }
 
 async function fetchEntry(request, env = {}, context = {}) {
-  return handle(request, env, context, {
+  const response = await handle(request, env, context, {
     fetchImpl: createCompatFetch(globalThis.fetch)
   });
+  const headers = new Headers(response.headers);
+  headers.set("X-Nexora-Gateway-Revision", GATEWAY_REVISION);
+  return new Response(response.body, { status: response.status, statusText: response.statusText, headers });
 }
 
 export default { fetch: fetchEntry };
-export { SHINIGAMI_HOST_SUFFIXES, createCompatFetch, fetchEntry, hostnameAllowed, isMangaDotNetVercelOrigin, normalizeCompatHeaders };
+export { GATEWAY_REVISION, SHINIGAMI_HOST_SUFFIXES, createCompatFetch, fetchEntry, hostnameAllowed, isMangaDotNetVercelOrigin, normalizeCompatHeaders };
