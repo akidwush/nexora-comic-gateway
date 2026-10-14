@@ -6,7 +6,7 @@
   "description": "Signed Cloudflare image edge for NEXORA public comics plus no-store VVIP delivery",
   "scripts": {
     "test": "node --test src/*.test.mjs",
-    "check": "node --check src/worker.mjs",
+    "check": "node --check src/worker.mjs && node --check src/provider-compat.mjs && node --check src/worker-entry.mjs",
     "deploy": "wrangler deploy"
   },
   "devDependencies": {
