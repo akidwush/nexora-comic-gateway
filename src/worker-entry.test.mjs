@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { createCompatFetch, fetchEntry, isMangaDotNetVercelOrigin, normalizeCompatHeaders } from "./worker-entry.mjs";
+import worker from "./worker-entry.mjs";
+import { createCompatFetch, isMangaDotNetVercelOrigin, normalizeCompatHeaders } from "./entry-helpers.mjs";
 
 
 test("Shinigami image compatibility drops stale Referer/Origin and uses current image headers", () => {
@@ -71,7 +72,7 @@ test("unrelated upstream requests pass through without changing request semantic
 
 
 test("entrypoint exposes a non-secret deploy revision header", async () => {
-  const response = await fetchEntry(new Request("https://gateway.example.test/health"), {
+  const response = await worker.fetch(new Request("https://gateway.example.test/health"), {
     ENABLE_PROVIDER_IMAGE_PROXY: "false"
   });
   assert.equal(response.status, 200);
