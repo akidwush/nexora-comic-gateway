@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { createCompatFetch, isMangaDotNetVercelOrigin, normalizeCompatHeaders } from "./worker-entry.mjs";
+import { createCompatFetch, fetchEntry, isMangaDotNetVercelOrigin, normalizeCompatHeaders } from "./worker-entry.mjs";
 
 
 test("Shinigami image compatibility drops stale Referer/Origin and uses current image headers", () => {
@@ -67,4 +67,15 @@ test("unrelated upstream requests pass through without changing request semantic
   assert.equal(seen.options.redirect, "manual");
   assert.equal(seen.options.headers.get("x-test"), "1");
   assert.equal(seen.options.headers.get("accept"), "image/webp");
+});
+
+
+test("entrypoint exposes a non-secret deploy revision header", async () => {
+  const response = await fetchEntry(new Request("https://gateway.example.test/health"), {
+    ENABLE_PROVIDER_IMAGE_PROXY: "false"
+  });
+  assert.equal(response.status, 200);
+  assert.equal(response.headers.get("x-nexora-gateway-revision"), "cloudflare-only-v1");
+  const payload = await response.json();
+  assert.equal(payload.ok, true);
 });
