@@ -147,6 +147,29 @@ test("MangaDotNet cold image fetches its signed allowlisted target at Cloudflare
   assert.equal(cache.puts, 1);
 });
 
+test("MangaDotNet plain-text access refusal is distinct from a challenge and never retried/cached", async () => {
+  const url = await signedUrl("mangadotnet", "https://mangadot.net/pages/1.jpg");
+  const cache = missCache();
+  const logs = [];
+  let calls = 0, cancelled = false;
+  const response = await handlePublicImageEdge(new Request(url), enabled(), {}, {
+    now: () => NOW_MS, cache, log: line => logs.push(JSON.parse(line)),
+    fetchImpl: async () => {
+      calls++;
+      return new Response(new ReadableStream({cancel() {cancelled = true;}}), {status: 403, headers: {"content-type": "text/plain", server: "envoy"}});
+    }
+  });
+  assert.equal(response.status, 503);
+  assert.deepEqual(await response.json(), {ok: false, error: "PROVIDER_ACCESS_DENIED", upstreamStatus: 403, retryable: false});
+  assert.equal(calls, 1);
+  assert.equal(cancelled, true);
+  assert.equal(cache.puts, 0);
+  assert.match(response.headers.get("cache-control"), /no-store/);
+  assert.equal(logs[0].upstreamStatus, 403);
+  assert.equal(logs[0].errorCode, "PROVIDER_ACCESS_DENIED");
+  assert.doesNotMatch(JSON.stringify(logs), /ticket|sig=|https:/);
+});
+
 test("MangaDotNet actual challenge fails closed without retry, Vercel fallback or cache write", async () => {
   let calls = 0;
   const cache = missCache();
