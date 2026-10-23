@@ -71,6 +71,8 @@ test("valid ManhwaDesu VVIP ticket resolves server-side then serves private no-s
         return metadataResponse();
       }
       assert.equal(current.toString(), "https://cdn.gilakomik.id/private/page-1.webp");
+      assert.equal(options.headers.Referer, undefined, "working page image request headers stay unchanged");
+      assert.equal(options.headers.Origin, undefined);
       return imageResponse();
     }
   });

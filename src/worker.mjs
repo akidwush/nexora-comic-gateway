@@ -382,7 +382,7 @@ async function handlePrivateImage(request,env,context={},dependencies={}) {
         method:request.method,
         redirect:"manual",
         signal:controller.signal,
-        headers:{Accept:"image/avif,image/webp,image/png,image/jpeg","User-Agent":"NEXORA-Comic-Gateway/1.0",Referer:`${PRIVATE_PROVIDER_SITE}/`,Origin:PRIVATE_PROVIDER_SITE}
+        headers:{Accept:"image/avif,image/webp,image/png,image/jpeg","User-Agent":"NEXORA-Comic-Gateway/1.0",...(payload.kind==="cover"?{Referer:`${PRIVATE_PROVIDER_SITE}/`,Origin:PRIVATE_PROVIDER_SITE}:{})}
       });
     } catch {
       errorCode="UPSTREAM_UNAVAILABLE";
