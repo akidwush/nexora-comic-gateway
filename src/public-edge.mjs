@@ -167,13 +167,6 @@ async function handlePublicImageEdge(request, env = {}, context = {}, dependenci
       }
     }
 
-    // MangaDotNet currently challenges the server-side provider. A cache miss must
-    // fail closed instead of routing its image bytes through the Vercel origin.
-    if (source === "mangadotnet") {
-      errorCode = "PROVIDER_CHALLENGE";
-      return response = responseJson({ ok: false, error: errorCode }, 503);
-    }
-
     const fetchImpl = dependencies.fetchImpl || globalThis.fetch;
     if (typeof fetchImpl !== "function") {
       errorCode = "UPSTREAM_UNAVAILABLE";
@@ -203,6 +196,19 @@ async function handlePublicImageEdge(request, env = {}, context = {}, dependenci
       errorCode = "UPSTREAM_REDIRECT_REJECTED";
       upstreamStatus = upstream.status;
       return response = responseJson({ ok: false, error: errorCode }, 502);
+    }
+    // Observe an actual provider refusal. Do not assume every cold image is
+    // challenged, and never fall back to the retired Vercel binary origin.
+    if (source === "mangadotnet" && (
+      upstream.headers.get("cf-mitigated") === "challenge" ||
+      (upstream.status === 403 && /cloudflare|html/i.test(
+        `${upstream.headers.get("server") || ""} ${upstream.headers.get("content-type") || ""}`
+      ))
+    )) {
+      await upstream.body?.cancel?.().catch(() => {});
+      errorCode = "PROVIDER_CHALLENGE";
+      upstreamStatus = upstream.status;
+      return response = responseJson({ ok: false, error: errorCode }, 503);
     }
     if (upstream.status < 200 || upstream.status >= 300) {
       errorCode = "UPSTREAM_FAILED";

@@ -16,7 +16,7 @@ Comic page **bytes must not use Vercel as a fallback transport**.
 
 NEXORA V1 may use Vercel for authenticated metadata/manifest work and for issuing a small signed `307` redirect to this Worker, but public/VVIP image bodies stay on Cloudflare. A retry must mint/refresh an edge ticket; it must not bypass the edge into a Vercel binary response.
 
-MangaDotNet is fail-closed on a Cloudflare cache miss while the provider is challenging server-side traffic. Existing valid Cloudflare cache hits remain readable. The old Vercel image-origin shield is not used by the active public edge path.
+MangaDotNet cache misses fetch the signed allowlisted image directly at Cloudflare, using fixed provider headers, bounded image bodies and no automatic retry. Actual upstream challenges fail closed without caching HTML or routing image bytes through Vercel. Existing valid cache hits remain readable. No anti-bot bypass is implemented.
 
 ## Public edge behavior
 
@@ -73,7 +73,7 @@ ManhwaDesu remains rejected by the public cached endpoint. DoujinDesu and Manhwa
 With the provider proxy enabled and the signing secret configured, `/health` reports Stage 3 readiness. The compatibility entrypoint also adds this non-secret response header:
 
 ```text
-X-Nexora-Gateway-Revision: cloudflare-only-v1
+X-Nexora-Gateway-Revision: comic-images-v2
 ```
 
 Use that header after deployment to verify the repaired Worker is actually live rather than relying on browser cache or assumptions.
@@ -88,7 +88,7 @@ Never commit or log the secret, tickets, signatures, cookies, raw user IDs, or r
 
 1. Merge the gateway PR only after CI is green.
 2. Deploy the updated Worker explicitly.
-3. Verify `/health` returns `X-Nexora-Gateway-Revision: cloudflare-only-v1`.
+3. Verify `/health` returns `X-Nexora-Gateway-Revision: comic-images-v2`.
 4. Verify a signed public image request is served by Cloudflare.
 5. Then merge/deploy the coordinated NEXORA V1 redirect hardening PR.
 6. Confirm normal and retry page requests return Cloudflare redirects and no comic page bytes are served by Vercel.
@@ -141,3 +141,9 @@ No R2 binding is required for provider or VVIP proxying.
 - Keep VVIP authorization in NEXORA V1 before ticket issuance.
 - Do not bypass Cloudflare/CAPTCHA protections.
 - Do not deploy production automatically from GitHub Actions/ChatGPT without explicit approval.
+
+## Private cover compatibility
+
+V1 cover redirects use `/v1/private-image` with the existing HMAC/private/VVIP/subject/expiry claims and an additional signed `kind: "cover"`. The resource ID is a manga slug, `idx` must be zero, and no upstream URL appears in the ticket. The Worker reads `/api/manga/{slug}` at the fixed ManhwaDesu API, validates its thumbnail against the existing private image allowlist, and returns `private, no-store` bytes without Cache API. Page tickets with no `kind` retain their previous contract. Unknown kinds, bad signatures, expired or non-VVIP claims, hostile thumbnails and redirects are rejected.
+
+Deploy the reviewed gateway revision **before** deploying the matching All Tools Nexora V1 cover changes; older Workers safely reject cover tickets. Neither PR changes secrets, provider permissions, databases or production deployments. This change is verified with offline provider fixtures; live provider availability must be checked separately after network access and deployment approval.

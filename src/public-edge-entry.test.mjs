@@ -126,22 +126,51 @@ test("declared oversized public image is rejected before body delivery", async (
   assert.deepEqual(await response.json(), { ok: false, error: "IMAGE_SIZE_INVALID" });
 });
 
-test("MangaDotNet cache miss fails closed without any Vercel or upstream byte fetch", async () => {
+test("MangaDotNet cold image fetches its signed allowlisted target at Cloudflare without Vercel", async () => {
   let calls = 0;
   const cache = missCache();
   const url = await signedUrl("mangadotnet", "https://cdn.mangadot.net/pages/page-01.webp");
   const response = await handlePublicImageEdge(new Request(url), enabled(), {}, {
     now: () => NOW_MS,
     cache,
-    fetchImpl: async () => {
+    fetchImpl: async (input, options) => {
       calls += 1;
+      assert.equal(input, "https://cdn.mangadot.net/pages/page-01.webp");
+      assert.equal(options.headers.Referer, "https://mangadot.net/");
+      assert.equal(options.redirect, "manual");
       return new Response(new Uint8Array([1]), { status: 200, headers: { "Content-Type": "image/webp" } });
     }
   });
+  assert.equal(response.status, 200);
+  assert.equal(calls, 1);
+  assert.deepEqual([...new Uint8Array(await response.arrayBuffer())], [1]);
+  assert.equal(cache.puts, 1);
+});
+
+test("MangaDotNet actual challenge fails closed without retry, Vercel fallback or cache write", async () => {
+  let calls = 0;
+  const cache = missCache();
+  const response = await handlePublicImageEdge(new Request(await signedUrl("mangadotnet", "https://cdn.mangadot.net/a.webp")), enabled(), {}, {
+    now: () => NOW_MS, cache,
+    fetchImpl: async () => { calls++; return new Response("blocked", {status:403,headers:{"cf-mitigated":"challenge","content-type":"text/html"}}); }
+  });
   assert.equal(response.status, 503);
-  assert.equal(calls, 0);
+  assert.equal(calls, 1);
   assert.equal(cache.puts, 0);
   assert.deepEqual(await response.json(), { ok: false, error: "PROVIDER_CHALLENGE" });
+});
+
+for (const [label, makeResponse, status] of [
+  ["HTML instead of an image", () => new Response("<html>blocked</html>", {headers:{"content-type":"text/html"}}), 415],
+  ["upstream failure", () => new Response("failed", {status:502}), 502],
+  ["redirect to an arbitrary host", () => new Response(null, {status:302,headers:{location:"https://evil.test/a"}}), 502],
+  ["network timeout", () => {throw new DOMException("timeout","AbortError");}, 502]
+]) test(`MangaDotNet ${label} is rejected with one request and no cached success`, async () => {
+  let calls=0;const cache=missCache();
+  const response=await handlePublicImageEdge(new Request(await signedUrl("mangadotnet","https://cdn.mangadot.net/a.webp")),enabled(),{}, {
+    now:()=>NOW_MS,cache,fetchImpl:async()=>{calls++;return makeResponse();}
+  });
+  assert.equal(response.status,status);assert.equal(calls,1);assert.equal(cache.puts,0);
 });
 
 test("MangaDotNet existing Cloudflare cache hit remains readable with zero network fetch", async () => {
