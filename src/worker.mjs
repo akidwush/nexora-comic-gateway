@@ -133,8 +133,12 @@ function validatePublicTarget(source,value,policyId) {
   if(!policy||policy.id!==policyId)return null;
   return validateTargetAgainstPolicy(value,policy);
 }
-function validatePrivateTarget(value) {
-  return validateTargetAgainstPolicy(value,PRIVATE_PROVIDER_POLICY);
+function validatePrivateTarget(value,kind="page") {
+  let policy=PRIVATE_PROVIDER_POLICY;
+  if(kind==="cover"){
+    try {if(new URL(value).hostname==="manhwadesu.run")policy={...PRIVATE_PROVIDER_POLICY,hosts:["manhwadesu.run"]};} catch {}
+  }
+  return validateTargetAgainstPolicy(value,policy);
 }
 function validPrivateTicketPayload(payload,now) {
   if(!payload||payload.v!==1||payload.src!==PRIVATE_SOURCE||payload.policy!==PRIVATE_PROVIDER_POLICY.id)return false;
@@ -244,7 +248,7 @@ async function fetchPrivatePageTarget(payload,fetchImpl,options={}) {
   let absolute;
   try {absolute=new URL(raw,PRIVATE_PROVIDER_SITE).toString();}
   catch {throw Object.assign(new Error("PRIVATE_TARGET_NOT_ALLOWED"),{status:403,code:"PRIVATE_TARGET_NOT_ALLOWED"});}
-  const validated=validatePrivateTarget(absolute);
+  const validated=validatePrivateTarget(absolute,cover?"cover":"page");
   if(!validated)throw Object.assign(new Error("PRIVATE_TARGET_NOT_ALLOWED"),{status:403,code:"PRIVATE_TARGET_NOT_ALLOWED"});
   return validated.target;
 }
@@ -382,7 +386,7 @@ async function handlePrivateImage(request,env,context={},dependencies={}) {
         method:request.method,
         redirect:"manual",
         signal:controller.signal,
-        headers:{Accept:"image/avif,image/webp,image/png,image/jpeg","User-Agent":"NEXORA-Comic-Gateway/1.0",...(payload.kind==="cover"?{Referer:`${PRIVATE_PROVIDER_SITE}/`,Origin:PRIVATE_PROVIDER_SITE}:{})}
+        headers:{Accept:"image/avif,image/webp,image/png,image/jpeg","User-Agent":"NEXORA-Comic-Gateway/1.0",...(payload.kind==="cover"?{Referer:target.hostname==="manhwadesu.run"?"https://manhwadesu.run/":`${PRIVATE_PROVIDER_SITE}/`,Origin:target.hostname==="manhwadesu.run"?"https://manhwadesu.run":PRIVATE_PROVIDER_SITE}:{})}
       });
     } catch {
       errorCode="UPSTREAM_UNAVAILABLE";

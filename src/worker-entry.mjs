@@ -2,7 +2,7 @@ import { handle } from "./worker.mjs";
 import { handlePublicImageEdge } from "./public-edge.mjs";
 import { createCompatFetch } from "./entry-helpers.mjs";
 
-const GATEWAY_REVISION = "comic-images-v2";
+const GATEWAY_REVISION = "comic-provider-live3";
 
 function withRevision(response) {
   const headers = new Headers(response.headers);
