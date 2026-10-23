@@ -211,6 +211,12 @@ async function handlePublicImageEdge(request, env = {}, context = {}, dependenci
       return response = responseJson({ ok: false, error: errorCode }, 503);
     }
     if (upstream.status < 200 || upstream.status >= 300) {
+      if (source === "mangadotnet" && upstream.status === 403) {
+        await upstream.body?.cancel?.().catch(() => {});
+        errorCode = "PROVIDER_ACCESS_DENIED";
+        upstreamStatus = 403;
+        return response = responseJson({ ok: false, error: errorCode, upstreamStatus, retryable: false }, 503);
+      }
       errorCode = "UPSTREAM_FAILED";
       upstreamStatus = upstream.status;
       return response = responseJson({ ok: false, error: errorCode }, upstream.status === 404 ? 404 : 502);

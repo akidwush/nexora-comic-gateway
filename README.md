@@ -149,3 +149,13 @@ V1 cover redirects use `/v1/private-image` with the existing HMAC/private/VVIP/s
 Deploy the reviewed gateway revision **before** deploying the matching All Tools Nexora V1 cover changes; older Workers safely reject cover tickets. Neither PR changes secrets, provider permissions, databases or production deployments. This change is verified with offline provider fixtures; live provider availability must be checked separately after network access and deployment approval.
 
 Live provider correction (2026-10-23): the current API returns cover thumbnails at exact host `manhwadesu.run`. This host is accepted only for signed cover tickets; page tickets keep their original allowlist. Cover requests to this host use the verified `.run` site headers. Subdomains and lookalike hosts remain rejected. A read-only live comparison returned 403 PRIVATE_TARGET_NOT_ALLOWED with the previously merged engine and 200 image/jpeg (211834 bytes) with this correction, using a local test signature, not a production user session.
+
+## Provider access diagnostics
+
+Revision `comic-provider-access4` distinguishes a plain MangaDotNet HTTP 403
+(`PROVIDER_ACCESS_DENIED`, HTTP 503, non-retryable) from a detected browser
+challenge (`PROVIDER_CHALLENGE`). Neither refusal is cached, retried, or routed
+through Vercel. This classification does not restore provider access; production
+availability still requires verification from the deployed Worker with a valid
+Nexora image ticket. Request logs contain status/code metadata, never ticket or
+image URLs.
