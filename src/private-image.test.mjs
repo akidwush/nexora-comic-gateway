@@ -205,3 +205,14 @@ test("private cover rejects hostile thumbnail and malformed metadata without ima
     assert.ok([403,404].includes(response.status));assert.equal(calls,1);
   }
 });
+
+test("live ManhwaDesu .run cover host works only for covers with the current site headers",async()=>{
+  let calls=0;const response=await handle(new Request(await signedPrivateUrl({kind:'cover'})),enabled(),{}, {now:()=>NOW_MS,fetchImpl:async(input,options)=>{
+    calls++;if(calls===1)return Response.json({data:{thumbnail:'https://manhwadesu.run/wp-content/uploads/images/thumbs/book/cover.jpg'}});
+    assert.equal(new URL(input).hostname,'manhwadesu.run');assert.equal(options.headers.Referer,'https://manhwadesu.run/');assert.equal(options.headers.Origin,'https://manhwadesu.run');return imageResponse();
+  }});assert.equal(response.status,200);assert.match(response.headers.get('cache-control'),/private, no-store/);assert.equal((await response.arrayBuffer()).byteLength,4);assert.equal(calls,2);
+});
+
+for(const [claims,url] of [[{},'https://manhwadesu.run/cover.jpg'],[{kind:'cover'},'https://evil.manhwadesu.run/cover.jpg'],[{kind:'cover'},'https://manhwadesu.run.evil.test/cover.jpg'],[{kind:'cover'},'http://manhwadesu.run/cover.jpg']])test(`current cover host remains scoped: ${url} ${JSON.stringify(claims)}`,async()=>{
+  let calls=0;const response=await handle(new Request(await signedPrivateUrl(claims)),enabled(),{}, {now:()=>NOW_MS,fetchImpl:async()=>{calls++;return claims.kind?Response.json({data:{thumbnail:url}}):metadataResponse(url);}});assert.equal(response.status,403);assert.equal(calls,1);
+});

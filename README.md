@@ -73,7 +73,7 @@ ManhwaDesu remains rejected by the public cached endpoint. DoujinDesu and Manhwa
 With the provider proxy enabled and the signing secret configured, `/health` reports Stage 3 readiness. The compatibility entrypoint also adds this non-secret response header:
 
 ```text
-X-Nexora-Gateway-Revision: comic-images-v2
+X-Nexora-Gateway-Revision: comic-provider-live3
 ```
 
 Use that header after deployment to verify the repaired Worker is actually live rather than relying on browser cache or assumptions.
@@ -88,7 +88,7 @@ Never commit or log the secret, tickets, signatures, cookies, raw user IDs, or r
 
 1. Merge the gateway PR only after CI is green.
 2. Deploy the updated Worker explicitly.
-3. Verify `/health` returns `X-Nexora-Gateway-Revision: comic-images-v2`.
+3. Verify `/health` returns `X-Nexora-Gateway-Revision: comic-provider-live3`.
 4. Verify a signed public image request is served by Cloudflare.
 5. Then merge/deploy the coordinated NEXORA V1 redirect hardening PR.
 6. Confirm normal and retry page requests return Cloudflare redirects and no comic page bytes are served by Vercel.
@@ -147,3 +147,5 @@ No R2 binding is required for provider or VVIP proxying.
 V1 cover redirects use `/v1/private-image` with the existing HMAC/private/VVIP/subject/expiry claims and an additional signed `kind: "cover"`. The resource ID is a manga slug, `idx` must be zero, and no upstream URL appears in the ticket. The Worker reads `/api/manga/{slug}` at the fixed ManhwaDesu API, validates its thumbnail against the existing private image allowlist, and returns `private, no-store` bytes without Cache API. Page tickets with no `kind` retain their previous contract. Unknown kinds, bad signatures, expired or non-VVIP claims, hostile thumbnails and redirects are rejected.
 
 Deploy the reviewed gateway revision **before** deploying the matching All Tools Nexora V1 cover changes; older Workers safely reject cover tickets. Neither PR changes secrets, provider permissions, databases or production deployments. This change is verified with offline provider fixtures; live provider availability must be checked separately after network access and deployment approval.
+
+Live provider correction (2026-10-23): the current API returns cover thumbnails at exact host `manhwadesu.run`. This host is accepted only for signed cover tickets; page tickets keep their original allowlist. Cover requests to this host use the verified `.run` site headers. Subdomains and lookalike hosts remain rejected. A read-only live comparison returned 403 PRIVATE_TARGET_NOT_ALLOWED with the previously merged engine and 200 image/jpeg (211834 bytes) with this correction, using a local test signature, not a production user session.
