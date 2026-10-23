@@ -71,6 +71,8 @@ test("valid ManhwaDesu VVIP ticket resolves server-side then serves private no-s
         return metadataResponse();
       }
       assert.equal(current.toString(), "https://cdn.gilakomik.id/private/page-1.webp");
+      assert.equal(options.headers.Referer, undefined, "working page image request headers stay unchanged");
+      assert.equal(options.headers.Origin, undefined);
       return imageResponse();
     }
   });
@@ -173,4 +175,33 @@ test("health reports private VVIP edge readiness without enabling R2 VVIP storag
   assert.equal(body.privateVvipImageProxyEnabled, true);
   assert.equal(body.vvip, true);
   assert.equal(body.imageDeliveryEnabled, false);
+});
+
+test("private cover resolves the manga thumbnail by signed ID with no shared cache or URL in ticket", async () => {
+  const url=await signedPrivateUrl({rid:"komik-uji",kind:"cover"});
+  const seen=[];
+  const response=await handle(new Request(url),enabled(),{}, {
+    now:()=>NOW_MS,
+    cache:{match(){throw new Error("private cache read");},put(){throw new Error("private cache write");}},
+    fetchImpl:async(input,options)=>{
+      seen.push(input);assert.equal(options.redirect,"manual");
+      if(seen.length===1){assert.equal(input,"https://api-md.gilakomik.id/api/manga/komik-uji");return Response.json({data:{thumbnail:"https://manhwadesu.wiki/wp-content/uploads/cover.webp"}});}
+      assert.equal(input,"https://manhwadesu.wiki/wp-content/uploads/cover.webp");
+      assert.equal(options.headers.Referer,"https://manhwadesu.wiki/");return imageResponse();
+    }
+  });
+  assert.equal(response.status,200);assert.match(response.headers.get("cache-control"),/private, no-store/);
+  assert.equal((await response.arrayBuffer()).byteLength,4);assert.equal(seen.length,2);
+});
+
+for(const overrides of [{kind:"other"},{kind:"cover",idx:1},{kind:"cover",url:"https://evil.test/a"}])test(`invalid private cover claims rejected: ${JSON.stringify(overrides)}`,async()=>{
+  let calls=0;const response=await handle(new Request(await signedPrivateUrl(overrides)),enabled(),{}, {now:()=>NOW_MS,fetchImpl:async()=>{calls++;throw new Error("not allowed");}});
+  assert.equal(response.status,403);assert.equal(calls,0);
+});
+
+test("private cover rejects hostile thumbnail and malformed metadata without image request",async()=>{
+  for(const metadata of [{data:{thumbnail:"https://evil.test/a.webp"}},{data:{thumbnail:"https://manhwadesu.wiki.evil.test/a.webp"}},{data:{}}]){
+    let calls=0;const response=await handle(new Request(await signedPrivateUrl({kind:"cover"})),enabled(),{}, {now:()=>NOW_MS,fetchImpl:async()=>{calls++;return Response.json(metadata);}});
+    assert.ok([403,404].includes(response.status));assert.equal(calls,1);
+  }
 });

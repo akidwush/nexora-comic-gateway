@@ -76,7 +76,7 @@ test("entrypoint exposes a non-secret deploy revision header", async () => {
     ENABLE_PROVIDER_IMAGE_PROXY: "false"
   });
   assert.equal(response.status, 200);
-  assert.equal(response.headers.get("x-nexora-gateway-revision"), "cloudflare-only-v1");
+  assert.equal(response.headers.get("x-nexora-gateway-revision"), "comic-images-v2");
   const payload = await response.json();
   assert.equal(payload.ok, true);
 });

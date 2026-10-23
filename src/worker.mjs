@@ -141,6 +141,8 @@ function validPrivateTicketPayload(payload,now) {
   if(payload.scope!=="vvip"||payload.private!==true||!/^[A-Za-z0-9_-]{20,32}$/.test(String(payload.sub||"")))return false;
   if(!PRIVATE_RESOURCE_PATTERN.test(String(payload.rid||"")))return false;
   if(!Number.isInteger(payload.idx)||payload.idx<0||payload.idx>400)return false;
+  if(payload.kind!==undefined&&payload.kind!=="cover")return false;
+  if(payload.kind==="cover"&&payload.idx!==0)return false;
   if(!Number.isSafeInteger(payload.exp)||payload.exp<=now||payload.exp>now+PRIVATE_SIGNATURE_LIFETIME_SECONDS)return false;
   if(Object.prototype.hasOwnProperty.call(payload,"url"))return false;
   return true;
@@ -210,7 +212,8 @@ function safeLog(log,event,source,status,cache,bytes,started,errorCode,upstreamS
   try {log(JSON.stringify(row));} catch {}
 }
 async function fetchPrivatePageTarget(payload,fetchImpl,options={}) {
-  const endpoint=new URL(`/api/manga/chapter/${encodeURIComponent(payload.rid)}`,PRIVATE_PROVIDER_API);
+  const cover=payload.kind==="cover";
+  const endpoint=new URL(cover?`/api/manga/${encodeURIComponent(payload.rid)}`:`/api/manga/chapter/${encodeURIComponent(payload.rid)}`,PRIVATE_PROVIDER_API);
   const controller=new AbortController();
   const timer=setTimeout(()=>controller.abort(),10_000);
   let upstream;
@@ -236,7 +239,7 @@ async function fetchPrivatePageTarget(payload,fetchImpl,options={}) {
   catch {throw Object.assign(new Error("PRIVATE_METADATA_INVALID"),{status:502,code:"PRIVATE_METADATA_INVALID"});}
   const body=payloadJson&&Object.prototype.hasOwnProperty.call(payloadJson,"data")?payloadJson.data:payloadJson;
   const images=Array.isArray(body?.images)?body.images:[];
-  const raw=images[payload.idx];
+  const raw=cover?(body?.thumbnail||body?.cover||body?.image):images[payload.idx];
   if(typeof raw!=="string"||!raw.trim())throw Object.assign(new Error("PRIVATE_PAGE_NOT_FOUND"),{status:404,code:"PRIVATE_PAGE_NOT_FOUND"});
   let absolute;
   try {absolute=new URL(raw,PRIVATE_PROVIDER_SITE).toString();}
@@ -379,7 +382,7 @@ async function handlePrivateImage(request,env,context={},dependencies={}) {
         method:request.method,
         redirect:"manual",
         signal:controller.signal,
-        headers:{Accept:"image/avif,image/webp,image/png,image/jpeg","User-Agent":"NEXORA-Comic-Gateway/1.0"}
+        headers:{Accept:"image/avif,image/webp,image/png,image/jpeg","User-Agent":"NEXORA-Comic-Gateway/1.0",...(payload.kind==="cover"?{Referer:`${PRIVATE_PROVIDER_SITE}/`,Origin:PRIVATE_PROVIDER_SITE}:{})}
       });
     } catch {
       errorCode="UPSTREAM_UNAVAILABLE";
